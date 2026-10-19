@@ -47,11 +47,13 @@ internal object CarPlayMediaKeys {
     private var artwork: Bitmap? = null
     private val artworkCache = LinkedHashMap<Int, Bitmap?>()
 
-    /** API 18 routes hardware keys through AudioManager and RemoteControlClient. */
-    private val legacyFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
-        if (change == AudioManager.AUDIOFOCUS_LOSS) synchronized(this) { legacyFocusHeld = false }
-    }
-    private var legacyFocusHeld = false
+    /**
+     * API 18/19 routes hardware keys through registerMediaButtonEventReceiver and RemoteControlClient.
+     * Key routing does not need audio focus there, so this object never requests focus itself:
+     * AudioFocusCoordinator is the single focus owner, and only when the user enabled audio focus
+     * (or the H52 Geely route is active). See issue #1.
+     */
+    private var mediaAudioStartedAt = 0L
     private var legacyReceiver: BroadcastReceiver? = null
     private var legacyPendingIntent: PendingIntent? = null
     private var legacyRemoteControlClient: RemoteControlClient? = null
@@ -137,6 +139,7 @@ internal object CarPlayMediaKeys {
     private fun updateLocked(active: Boolean) {
         val context = appContext ?: return
         if (controller == null) return
+        if (active && !mediaAudioActive) mediaAudioStartedAt = SystemClock.elapsedRealtime()
         mediaAudioActive = active
         if (active) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -159,6 +162,11 @@ internal object CarPlayMediaKeys {
                 val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return
                 val index = CarPlayMediaButton.forKeyCode(event.keyCode) ?: return
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    if (isStartupPlayPauseEcho(index)) {
+                        Log.w(TAG, "ignored ${KeyEvent.keyCodeToString(event.keyCode)} within " +
+                            "${MEDIA_START_KEY_GUARD_MS}ms of CarPlay media start (head-unit source-switch echo)")
+                        return
+                    }
                     send(index, "legacyKeyEvent")
                 }
             }
@@ -209,19 +217,25 @@ internal object CarPlayMediaKeys {
             return
         }
         val context = appContext ?: return
+        // Below API 21 only the media-button receiver/RCC is needed for hardware keys. Do not
+        // request STREAM_MUSIC AUDIOFOCUS_GAIN here: it ignored the "audio focus" setting (off by
+        // default) and took permanent focus from the head unit's own media/Bluetooth-music app on
+        // every CarPlay music start. GKUI's Bluetooth music app is AVRCP-connected to the same
+        // iPhone and answers AUDIOFOCUS_LOSS by pausing it, so music stopped after ~1-2 s while
+        // navigation (which never takes focus) kept working. AudioFocusCoordinator owns focus.
         registerLegacyMediaButtons(context)
-        // H52 track coordinator owns vendor focus; a second MUSIC focus mutes that route.
-        if (AirPlayPersistence.loadGeelyAudioRouting(context)) return
-        if (legacyFocusHeld) return
-        val audio = context.systemService(AudioManager::class.java, "audio") ?: return
-        @Suppress("DEPRECATION")
-        val granted = audio.requestAudioFocus(
-            legacyFocusListener,
-            AudioManager.STREAM_MUSIC,
-            AudioManager.AUDIOFOCUS_GAIN,
-        )
-        legacyFocusHeld = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        Log.i(TAG, "legacy audio focus granted=$legacyFocusHeld")
+    }
+
+    /**
+     * Some head units send a play/pause key to the top media-button receiver while they switch
+     * their own source away. The legacy key maps to a CarPlay toggle, which would pause the
+     * iPhone right after music starts, so such keys are ignored briefly after media starts.
+     */
+    @Synchronized
+    private fun isStartupPlayPauseEcho(index: Int): Boolean {
+        if (index != CarPlayMediaButton.PLAY_PAUSE && index != CarPlayMediaButton.PAUSE) return false
+        if (!mediaAudioActive || mediaAudioStartedAt == 0L) return false
+        return SystemClock.elapsedRealtime() - mediaAudioStartedAt < MEDIA_START_KEY_GUARD_MS
     }
 
     private fun publishPlaybackStateLocked() {
@@ -246,12 +260,8 @@ internal object CarPlayMediaKeys {
         unregisterLegacyMediaButtons()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) session?.close()
         session = null
-        if (legacyFocusHeld) {
-            @Suppress("DEPRECATION")
-            appContext?.systemService(AudioManager::class.java, "audio")?.abandonAudioFocus(legacyFocusListener)
-        }
-        legacyFocusHeld = false
         mediaAudioActive = false
+        mediaAudioStartedAt = 0L
         nowPlaying = CarPlayNowPlaying()
         elapsedUpdatedAt = 0L
         artwork = null
@@ -293,6 +303,7 @@ internal object CarPlayMediaKeys {
         ).also { scaled -> if (scaled !== decoded) decoded.recycle() }
     }
 
+    private const val MEDIA_START_KEY_GUARD_MS = 2_500L
     private const val MAX_ARTWORK_DIMENSION = 384
     private const val MAX_ARTWORK_SOURCE_DIMENSION = 8_192
     private const val MAX_CACHED_ARTWORK = 4
