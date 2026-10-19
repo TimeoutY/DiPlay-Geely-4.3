@@ -61,6 +61,7 @@ internal class AudioFocusCoordinator(
     private var currentLegacyStreamType = AudioManager.STREAM_MUSIC
     private val legacyOnlyTracks = LinkedHashMap<AudioTrack, Pair<AudioChannel, Int>>()
     private var legacyOnlyFocusHeld = false
+    private var legacyOnlyFocusStream: Int? = null
     private var legacyRequestHeld = false
     private var requestedChannel: AudioChannel? = null
     private val geelyTracks = LinkedHashMap<AudioTrack, GeelyFocusKey>()
@@ -72,6 +73,8 @@ internal class AudioFocusCoordinator(
             when (change) {
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> setVolume(DUCKED_VOLUME)
                 AudioManager.AUDIOFOCUS_GAIN -> setVolume(FULL_VOLUME)
+                // A permanent loss drops our stack entry; let the next track start request again.
+                AudioManager.AUDIOFOCUS_LOSS -> { legacyOnlyFocusHeld = false }
                 // Keep CarPlay audio running on permanent or transient loss. Some head units
                 // do not send a later gain callback after taking focus back.
             }
@@ -213,11 +216,21 @@ internal class AudioFocusCoordinator(
         if (primary == null) {
             if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
             legacyOnlyFocusHeld = false
+            legacyOnlyFocusStream = null
             return
         }
-        if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
         currentLegacyStreamType = primary.second
+        // Keep the held request when the primary stream is unchanged. Abandoning and re-requesting
+        // on every track start/stop briefly hands focus back to the head unit's own media app,
+        // which may resume and then pause (and pause the iPhone over AVRCP) again.
+        if (legacyOnlyFocusHeld && legacyOnlyFocusStream == primary.second) return
+        if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
         legacyOnlyFocusHeld = requestAudioFocusLegacy(primary.second) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        legacyOnlyFocusStream = if (legacyOnlyFocusHeld) primary.second else null
+        val line = "Audio: legacy focus requested channel=${primary.first} stream=${primary.second} " +
+            "granted=$legacyOnlyFocusHeld activeTracks=${legacyOnlyTracks.size}"
+        Log.i(TAG, line)
+        runCatching { report(line) }
     }
 
     private fun abandonFocus() {
