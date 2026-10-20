@@ -638,6 +638,7 @@ private class VideoDecoder(
     }
 
     private fun run() {
+        com.shilapi.xcertplay.compat.H52NoRootBridge.boostThreadPriority()
         try {
             while (running) {
                 val job = queue.poll(5)
@@ -860,8 +861,8 @@ private class VideoDecoder(
         Log.w(TAG, "Video recovery: $reason; waiting for keyframe")
         stats.onRecovery()
         report("recovery: $reason; waiting for keyframe")
-        // Recreate with codec-specific data: flush can discard CSD before the first output.
-        releaseDecoder()
+        // Use non-destructive flush instead of destroying OMX decoder instance
+        com.shilapi.xcertplay.compat.H52MediaCodecOptimizer.flushDecoder(decoder)
         referenceChain.reset()
         requestKeyFrameIfDue()
     }
@@ -1054,7 +1055,7 @@ private class AudioRenderer(
         try {
             when (format.codec) {
                 AudioCodecKind.AAC_LC -> configureCodec(MediaFormat.MIMETYPE_AUDIO_AAC)
-                AudioCodecKind.OPUS -> configureCodec(MediaFormat.MIMETYPE_AUDIO_OPUS)
+                AudioCodecKind.OPUS -> if (android.os.Build.VERSION.SDK_INT >= 21) configureCodec(MediaFormat.MIMETYPE_AUDIO_OPUS)
                 AudioCodecKind.LPCM -> Unit
             }
             createTrack()
@@ -1352,6 +1353,11 @@ private class AudioRenderer(
             }
             AudioCodecKind.OPUS -> {
                 val accessUnit = rtp.copyOfRange(12, rtp.size)
+                if (android.os.Build.VERSION.SDK_INT < 21) {
+                    val pcm = LegacyOpus.decode(this, accessUnit, format.sampleRate, format.channels)
+                    writePcm(pcm, 0, pcm.size)
+                    return
+                }
                 if (accessUnit.size < MIN_OPUS_PACKET_BYTES) {
                     if (!firstOpusShortPacketLogged) {
                         firstOpusShortPacketLogged = true
@@ -1586,6 +1592,7 @@ private class AudioRenderer(
 
     @Synchronized
     private fun release() {
+        LegacyOpus.release(this)
         abandonAudioFocus()
         val codec = codec
         this.codec = null

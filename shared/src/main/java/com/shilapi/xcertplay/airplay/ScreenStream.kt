@@ -55,6 +55,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     private fun accept(bound: ServerSocket) {
         try {
             val accepted = bound.accept()
+            com.shilapi.xcertplay.compat.H52NoRootBridge.tuneVideoSocket(accepted)
             socket = accepted
             run(accepted)
         } catch (error: Exception) {
@@ -63,6 +64,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     }
 
     private fun run(sock: Socket) {
+        com.shilapi.xcertplay.compat.H52NoRootBridge.boostThreadPriority()
         var failure: Throwable? = null
         val stats = StreamReceiveStats("video", onDiagnostic)
         try {

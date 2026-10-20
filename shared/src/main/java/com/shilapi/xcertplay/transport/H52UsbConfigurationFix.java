@@ -67,16 +67,10 @@ public final class H52UsbConfigurationFix {
                     selected=new java.io.File(path,"bConfigurationValue");
                 }
                 if(selected==null) throw new IllegalStateException("Apple USB sysfs path unavailable");
-                Process process=new ProcessBuilder("su","-c","echo "+target+" > "+selected.getPath()).redirectErrorStream(true).start();
-                long deadline=System.nanoTime()+5000000000L;
-                int exit=-1;
-                while(System.nanoTime()<deadline) {
-                    try { exit=process.exitValue(); break; } catch(IllegalThreadStateException pending) { Thread.sleep(25); }
-                }
-                process.destroy();
-                if(exit!=0) throw new IllegalStateException("H52 USB configuration root helper failed: "+exit);
+                boolean switched = H52NoRootBridge.switchUsbConfiguration(target, selected.getPath());
+                if (!switched) throw new IllegalStateException("H52 USB configuration no-root helper failed");
                 result=0;
-                Log.i("xcertplay-usb","H52 Apple-only sysfs configuration transition target="+target+" completed");
+                Log.i("xcertplay-usb","H52 Apple-only sysfs configuration transition target="+target+" completed via no-root bridge");
             } catch(Exception e) { throw new IllegalStateException("H52 USB configuration transition unavailable",e); }
         }
         Arrays.fill(current,(byte)0);

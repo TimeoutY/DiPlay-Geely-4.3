@@ -1867,7 +1867,7 @@ class DiPlayActivity : ComponentActivity() {
         }
         return grid
     }
-    private fun version() = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.1.0-beta.1"
+    private fun version() = "0.2.13-H52-P16"
     private fun languageSettings(content: LinearLayout) {
         section(content, getString(R.string.language_section_title)) { card ->
             card.addView(label(getString(R.string.language_hint), 14, MUTED))
