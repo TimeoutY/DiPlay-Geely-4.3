@@ -92,11 +92,21 @@ object AirPlayCrypto {
         nonce: ByteArray,
         ciphertextAndTag: ByteArray,
         aad: ByteArray = ByteArray(0),
+    ): ByteArray = chachaOpen(key, nonce, ciphertextAndTag, 0, ciphertextAndTag.size, aad)
+
+    /** Opens [length] bytes of [input] from [offset], so callers can reuse a receive buffer. */
+    fun chachaOpen(
+        key: ByteArray,
+        nonce: ByteArray,
+        input: ByteArray,
+        offset: Int,
+        length: Int,
+        aad: ByteArray,
     ): ByteArray {
         val cipher = ChaCha20Poly1305()
         cipher.init(false, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
-        val output = ByteArray(cipher.getOutputSize(ciphertextAndTag.size))
-        val processed = cipher.processBytes(ciphertextAndTag, 0, ciphertextAndTag.size, output, 0)
+        val output = ByteArray(cipher.getOutputSize(length))
+        val processed = cipher.processBytes(input, offset, length, output, 0)
         val finalized = cipher.doFinal(output, processed)
         val outputLength = processed + finalized
         return if (outputLength == output.size) output else output.copyOf(outputLength)

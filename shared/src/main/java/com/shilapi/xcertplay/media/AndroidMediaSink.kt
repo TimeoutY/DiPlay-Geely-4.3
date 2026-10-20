@@ -1065,6 +1065,9 @@ private class AudioRenderer(
     }
 
     private fun run() {
+        // Standard Android audio-thread priority. Video threads run at URGENT_DISPLAY (P16), so
+        // keep PCM delivery from starving behind them on a single busy API 18/19 CPU.
+        runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO) }
         try {
             when (format.codec) {
                 AudioCodecKind.AAC_LC -> configureCodec(MediaFormat.MIMETYPE_AUDIO_AAC)

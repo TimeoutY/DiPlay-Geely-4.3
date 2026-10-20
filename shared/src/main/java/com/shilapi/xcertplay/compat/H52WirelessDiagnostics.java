@@ -8,12 +8,9 @@ public final class H52WirelessDiagnostics {
 
     public static int channel(int observed, int configured) {
         if (observed > 0) return observed;
-        int c = H52NoRootBridge.readHostapdChannel();
-        if (c > 0) {
-            Log.i("DiPlay-H52-Wireless", "active AP channel=" + c + " source=hostapd/default36");
-            return c;
-        }
-        return configured;
+        int c = H52NoRootBridge.readHostapdChannel(observed, configured);
+        Log.i("DiPlay-H52-Wireless", "active AP channel=" + c + " source=hostapd/configured/default36");
+        return c;
     }
 
     public static void packet(DatagramPacket p, boolean incoming) {
