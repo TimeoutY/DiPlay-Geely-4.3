@@ -8,7 +8,11 @@ import android.util.Log
 /** Starts the CarPlay host after boot when the user has enabled the startup option. */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        if (intent.action !in BOOT_ACTIONS) return
+        com.shilapi.xcertplay.logs.DiPlayLog.start(context)
+        com.shilapi.xcertplay.logs.DiPlayLog.note(TAG, "boot broadcast ${intent.action}")
+        // Independent of "open after the car starts": the hotspot can come up without the UI.
+        BootHotspotService.request(context, "boot")
         val launchEnabled = AirPlayPersistence.loadAutoStartOnBoot(context)
         StartupDiagnosticSnapshot.received(context, launchEnabled)
         if (!launchEnabled) return
@@ -31,5 +35,11 @@ class BootReceiver : BroadcastReceiver() {
 
     private companion object {
         const val TAG = "xcertplay-boot"
+        /** Some ROMs (and fast-boot head units) send QUICKBOOT_POWERON instead of BOOT_COMPLETED. */
+        val BOOT_ACTIONS = setOf(
+            Intent.ACTION_BOOT_COMPLETED,
+            "android.intent.action.QUICKBOOT_POWERON",
+            "com.htc.intent.action.QUICKBOOT_POWERON",
+        )
     }
 }

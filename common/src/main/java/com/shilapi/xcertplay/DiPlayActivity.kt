@@ -158,6 +158,9 @@ class DiPlayActivity : ComponentActivity() {
             isAppearanceLightStatusBars = false
             hide(WindowInsetsCompat.Type.statusBars())
         }
+        com.shilapi.xcertplay.logs.DiPlayLog.start(this)
+        // 「开机自动开启热点」 also covers a head unit that kept the process alive or missed BOOT_COMPLETED.
+        if (!CarPlayBackgroundSession.hasSession()) BootHotspotService.request(this, "app-launch")
         setupError = runCatching { DiPlayBootstrap.ensure(this) }.exceptionOrNull()?.let {
             android.util.Log.e("DiPlaySetup", "CarPlay authentication could not be loaded", it)
             getString(R.string.setup_error_auth)
@@ -317,7 +320,9 @@ class DiPlayActivity : ComponentActivity() {
         right.addView(button(getString(R.string.connect_with_usb), false) { connect(false) }, matchButton())
         right.addView(label(getString(R.string.plug_your_iphone_into_a_usb_data_port_allow_carplay_when_y), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(dp(8), dp(10), dp(8), dp(24)) })
         right.addView(button(getString(R.string.settings), false) { page = "settings"; render() }, matchButton())
-        right.addView(label(getString(R.string.make_diplay_feel_right_for_your_car), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, dp(24)) })
+        right.addView(label(getString(R.string.make_diplay_feel_right_for_your_car), 14, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(10), 0, dp(16)) })
+        right.addView(button(getString(R.string.log_open_button), false) { openLogs() }, matchButton(0, 56))
+        right.addView(space(16))
         right.addView(label("${getString(R.string.home_public_preview)}${version()}", 12, MUTED).apply { trackedSpacing = .08f })
         if (wide) {
             // Both rows share column widths. The USB button starts at the wireless
@@ -361,6 +366,7 @@ class DiPlayActivity : ComponentActivity() {
             card.addView(button(getString(R.string.open_connection_setup), false) { page = "connection"; render() }, matchButton(12, 60))
         }
         section(content, getString(R.string.diagnostics), R.drawable.ic_dp_diagnostics) { card ->
+            card.addView(button(getString(R.string.log_open_button), false) { openLogs() }, matchButton(0, 60))
             var vendorCheckButton: Button? = null
             toggle(
                 card,
@@ -391,6 +397,7 @@ class DiPlayActivity : ComponentActivity() {
         }
         section(content, getString(R.string.automatic_connection), R.drawable.ic_dp_automation) { card ->
             toggle(card, getString(R.string.connect_when_diplay_opens), getString(R.string.use_your_last_connection_type_and_selected_iphone), DiPlayPreferences.autoConnect(this)) { DiPlayPreferences.saveAutoConnect(this, it) }
+            toggle(card, getString(R.string.boot_hotspot_title), getString(R.string.boot_hotspot_description), AirPlayPersistence.loadBootHotspotEnabled(this)) { AirPlayPersistence.saveBootHotspotEnabled(this, it) }
             toggle(card, getString(R.string.open_after_the_car_starts), getString(R.string.availability_depends_on_your_head_unit_s_startup_settings), AirPlayPersistence.loadAutoStartOnBoot(this)) { AirPlayPersistence.saveAutoStartOnBoot(this, it) }
             card.addView(button(selectedPhoneButtonLabel(), false) { choosePhone() }, matchButton(12, 60))
         }
@@ -411,6 +418,9 @@ class DiPlayActivity : ComponentActivity() {
         }
         section(content, getString(R.string.audio_routing)) { card ->
             geelyAudioControl(card)
+            toggle(card, getString(R.string.session_focus_title), getString(R.string.session_focus_description), AirPlayPersistence.loadSessionAudioFocus(this)) { AirPlayPersistence.saveSessionAudioFocus(this, it) }
+            toggle(card, getString(R.string.anti_autopause_title), getString(R.string.anti_autopause_description), AirPlayPersistence.loadAntiAutoPause(this)) { AirPlayPersistence.saveAntiAutoPause(this, it) }
+            toggle(card, getString(R.string.drop_bt_music_title), getString(R.string.drop_bt_music_description), AirPlayPersistence.loadDropBluetoothMusic(this)) { AirPlayPersistence.saveDropBluetoothMusic(this, it) }
             if (!AirPlayPersistence.loadGeelyAudioRouting(this) || com.shilapi.xcertplay.media.GeelyAudioCapabilities.detect() == null) {
                 toggle(card, getString(R.string.contrib_audio_home_toggle_audio_focus), getString(R.string.contrib_audio_home_toggle_audio_focus_desc), AirPlayPersistence.loadAudioFocusEnabled(this)) { AirPlayPersistence.saveAudioFocusEnabled(this, it) }
             }
@@ -1961,6 +1971,10 @@ class DiPlayActivity : ComponentActivity() {
         }.setNegativeButton(getString(R.string.later), null).show()
     }
     private fun openSystem(intent: Intent) { runCatching { startActivity(intent) }.onFailure { toast(getString(R.string.open_this_setting_from_your_car_s_settings_app)) } }
+    private fun openLogs() {
+        startActivity(Intent(this, com.shilapi.xcertplay.logs.DiPlayLogActivity::class.java))
+    }
+
     private fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
 
     private fun playTestTone(streamType: Int) {

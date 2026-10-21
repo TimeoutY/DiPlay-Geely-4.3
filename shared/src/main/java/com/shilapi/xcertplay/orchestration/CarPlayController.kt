@@ -210,6 +210,12 @@ class CarPlayController(
     private var clusterUiShown = true
     private val playbackStatus = com.shilapi.xcertplay.media.CarPlayPlaybackStatus()
 
+    /**
+     * Told when an AirPlay session becomes active (true) or ends (false), before any audio
+     * stream; second argument is true for wireless CarPlay. May run on any thread.
+     */
+    @Volatile var airPlaySessionListener: ((Boolean, Boolean) -> Unit)? = null
+
     /** Told when the iPhone starts or stops playing media; may run on any thread. */
     @Volatile var playbackListener: ((Boolean) -> Unit)? = null
 
@@ -264,6 +270,10 @@ class CarPlayController(
     private val sessionListener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
             if (activeSession !== session) {
+                val wireless = wirelessAirPlayEndpoint != null || wirelessTunnelReady.get()
+                try { airPlaySessionListener?.invoke(true, wireless) } catch (error: Exception) {
+                    Log.w(IphoneCarPlayConfiguration.TAG, "session listener failed", error)
+                }
                 BydNavigationOutputs.start(appContext)
                 com.shilapi.xcertplay.glance.CarPlayGlance.setConnected(true)
                 // The gear may have changed since /info.
@@ -280,6 +290,9 @@ class CarPlayController(
         override fun onSessionEnded(session: AirPlaySession) {
             if (activeSession === session) {
                 activeSession = null
+                try { airPlaySessionListener?.invoke(false, false) } catch (error: Exception) {
+                    Log.w(IphoneCarPlayConfiguration.TAG, "session listener failed", error)
+                }
                 BydNavigationOutputs.endNow()
                 com.shilapi.xcertplay.glance.CarPlayGlance.setConnected(false)
                 videoListener?.onVideoSessionEnded()

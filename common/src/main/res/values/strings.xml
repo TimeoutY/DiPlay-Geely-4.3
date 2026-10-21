@@ -558,4 +558,35 @@
     <string name="home_hotspot_started_toast">Car hotspot is on: %1$s</string>
     <string name="home_hotspot_stopped_toast">Car hotspot is off</string>
     <string name="home_hotspot_failed_toast">Hotspot failed: %1$s</string>
+    <!-- In-app log viewer -->
+    <string name="log_open_button">Logs</string>
+    <string name="log_title">Logs</string>
+    <string name="log_refresh">Refresh</string>
+    <string name="log_clear">Clear</string>
+    <string name="log_save">Save to file</string>
+    <string name="log_filter_audio_off">Audio only: off</string>
+    <string name="log_filter_audio_on">Audio only: on</string>
+    <string name="log_empty">No log lines yet. Play music in CarPlay, then come back here.</string>
+    <string name="log_status">Showing %1$d of %2$d lines (buffer %3$d) · %4$s · auto-refresh 2 s</string>
+    <string name="log_reader_ok">capturing</string>
+    <string name="log_reader_failed">logcat unreadable (%1$s), app events only</string>
+    <string name="log_saved_to">Saved: %1$s</string>
+    <string name="log_save_failed">Could not save the log: %1$s</string>
+    <string name="log_unknown">?</string>
+    <string name="log_sum_focus">Focus: granted=%1$s · last change=%2$s</string>
+    <string name="log_sum_play">play(): playState=%1$s (3=playing) · volume=%2$s · muted=%3$s · mode=%4$s</string>
+    <string name="log_pcm_flowing">PCM: flowing · written=%1$d frames · head +%2$d frames per window</string>
+    <string name="log_pcm_stalled">PCM: STALLED · written=%1$d frames · head +%2$d frames per window</string>
+    <string name="log_pcm_none">PCM: no music stats yet</string>
+    <string name="log_sum_iphone">iPhone playing=%1$s · BT music: %2$s</string>
+    <!-- Boot hotspot -->
+    <string name="boot_hotspot_title">Turn on hotspot at startup</string>
+    <string name="boot_hotspot_description">After the head unit starts (and when DiPlay opens), turn on the car\'s own Wi-Fi hotspot so the iPhone can join. Retries for about a minute and switches DiPlay to car-hotspot mode once it is on. DiPlay must have been opened once after installing.</string>
+    <!-- Audio focus redesign -->
+    <string name="session_focus_title">Take audio focus when CarPlay connects</string>
+    <string name="session_focus_description">Android 4.x: take music focus once when the iPhone connects and keep it for the whole session, so the car\'s Bluetooth music app gives way before any song starts. Off: take it when music starts.</string>
+    <string name="anti_autopause_title">Prevent music auto-pause</string>
+    <string name="anti_autopause_description">Ignore play/pause keys for 2.5 s after music starts or focus is taken, and if the car pauses the iPhone within 6 s of taking focus without a key press, resume once.</string>
+    <string name="drop_bt_music_title">Disconnect Bluetooth music during CarPlay</string>
+    <string name="drop_bt_music_description">When wireless CarPlay connects, disconnect only the iPhone\'s Bluetooth music (A2DP) link so the car\'s Bluetooth music app cannot pause CarPlay. Calls (HFP) stay connected.</string>
 </resources>

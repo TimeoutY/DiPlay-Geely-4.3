@@ -20,7 +20,7 @@
             <category android:name="android.intent.category.HOME" />
         </intent>
     </queries>
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="18" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="22" />
     <application>
         <activity android:name="com.shilapi.xcertplay.DiPlayActivity"
             android:exported="true" android:launchMode="singleTop"
@@ -93,8 +93,15 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+        <service android:name="com.shilapi.xcertplay.BootHotspotService" android:exported="false" />
+        <activity android:name="com.shilapi.xcertplay.logs.DiPlayLogActivity"
+            android:exported="false"
+            android:configChanges="density|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:theme="@style/Theme.Xcertplay" />
     </application>
 
 </manifest>

@@ -558,4 +558,35 @@
     <string name="home_hotspot_started_toast">车机热点已开启：%1$s</string>
     <string name="home_hotspot_stopped_toast">车机热点已关闭</string>
     <string name="home_hotspot_failed_toast">热点操作失败：%1$s</string>
+    <!-- 应用内日志 -->
+    <string name="log_open_button">日志</string>
+    <string name="log_title">日志</string>
+    <string name="log_refresh">刷新</string>
+    <string name="log_clear">清空</string>
+    <string name="log_save">保存到文件</string>
+    <string name="log_filter_audio_off">只看音频：关</string>
+    <string name="log_filter_audio_on">只看音频：开</string>
+    <string name="log_empty">还没有日志。先在 CarPlay 里播放音乐，再回到这里查看。</string>
+    <string name="log_status">显示 %1$d / %2$d 行（缓存 %3$d 行）· %4$s · 每 2 秒自动刷新</string>
+    <string name="log_reader_ok">正在记录</string>
+    <string name="log_reader_failed">无法读取 logcat（%1$s），只显示应用事件</string>
+    <string name="log_saved_to">已保存：%1$s</string>
+    <string name="log_save_failed">日志保存失败：%1$s</string>
+    <string name="log_unknown">?</string>
+    <string name="log_sum_focus">音频焦点：granted=%1$s · 最近变化=%2$s</string>
+    <string name="log_sum_play">play()：playState=%1$s（3=播放中）· 音量=%2$s · 静音=%3$s · mode=%4$s</string>
+    <string name="log_pcm_flowing">PCM：正常流动 · 写入 %1$d 帧 · 播放头每周期 +%2$d 帧</string>
+    <string name="log_pcm_stalled">PCM：停滞！· 写入 %1$d 帧 · 播放头每周期 +%2$d 帧</string>
+    <string name="log_pcm_none">PCM：还没有音乐统计</string>
+    <string name="log_sum_iphone">iPhone 播放中=%1$s · 蓝牙音乐：%2$s</string>
+    <!-- 开机热点 -->
+    <string name="boot_hotspot_title">开机自动开启热点</string>
+    <string name="boot_hotspot_description">车机开机后（以及打开 DiPlay 时）自动开启车机自带的 Wi‑Fi 热点，方便 iPhone 加入。约一分钟内会多次重试，开启成功后 DiPlay 改用「车机热点」方式。安装后需要先手动打开一次 DiPlay 才会生效。</string>
+    <!-- 音频焦点 -->
+    <string name="session_focus_title">连接时预先占用音频焦点</string>
+    <string name="session_focus_description">Android 4.x：iPhone 一连上就占用一次音乐焦点并保持整个会话，让车机蓝牙音乐在歌曲开始前就让出；关闭则在开始播放时才占用。</string>
+    <string name="anti_autopause_title">防止音乐被自动暂停</string>
+    <string name="anti_autopause_description">开始播放或占用焦点后 2.5 秒内忽略播放/暂停键；占用焦点 6 秒内若车机在没有按键的情况下暂停了 iPhone，自动恢复播放一次。</string>
+    <string name="drop_bt_music_title">连接 CarPlay 时断开蓝牙音乐</string>
+    <string name="drop_bt_music_description">无线 CarPlay 连上后，只断开 iPhone 的蓝牙音乐（A2DP），避免车机蓝牙音乐暂停 CarPlay。通话（HFP）保持连接。</string>
 </resources>
