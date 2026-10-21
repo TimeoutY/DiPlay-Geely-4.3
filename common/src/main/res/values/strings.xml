@@ -541,4 +541,21 @@
     <string name="legacy_report_failed">The user-storage root is unavailable or not writable. Check storage and retry.</string>
     <string name="legacy_report_retry">Retry</string>
     <string name="geely_bt_connection_status_note">The H52 factory connection route is selected. Choose an iPhone already paired in the factory interface, then try connecting. These status readings do not prove that wireless CarPlay is connected.</string>
+    <!-- Home 「启动热点」 button -->
+    <string name="home_hotspot_start">Start hotspot</string>
+    <string name="home_hotspot_starting">Starting hotspot…</string>
+    <string name="home_hotspot_stopping">Stopping hotspot…</string>
+    <string name="home_hotspot_on">Hotspot on · tap to stop</string>
+    <string name="home_hotspot_on_ssid">Hotspot on · %1$s</string>
+    <string name="home_hotspot_stop">Stop hotspot</string>
+    <string name="home_hotspot_open_settings">Hotspot settings</string>
+    <string name="home_hotspot_stop_title">Stop the car hotspot?</string>
+    <string name="home_hotspot_stop_message">The car’s Wi-Fi hotspot will be turned off. Wireless CarPlay in car-hotspot mode can’t connect until it is started again.</string>
+    <string name="home_hotspot_stop_message_session">The car’s Wi-Fi hotspot will be turned off and the current wireless CarPlay connection will drop.</string>
+    <string name="home_hotspot_switch_title">Switch to the car hotspot?</string>
+    <string name="home_hotspot_switch_message">The current wireless link (Wi-Fi Direct / local hotspot) creates its own network automatically when you tap Connect phone, so it doesn’t need a separate hotspot. Starting the car’s own hotspot switches DiPlay to car-hotspot mode for future connections, and may turn off the car’s Wi-Fi client connection. Continue?</string>
+    <string name="home_hotspot_switch_confirm">Switch and start</string>
+    <string name="home_hotspot_started_toast">Car hotspot is on: %1$s</string>
+    <string name="home_hotspot_stopped_toast">Car hotspot is off</string>
+    <string name="home_hotspot_failed_toast">Hotspot failed: %1$s</string>
 </resources>

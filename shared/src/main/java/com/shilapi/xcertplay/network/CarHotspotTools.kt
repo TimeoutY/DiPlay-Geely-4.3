@@ -47,6 +47,82 @@ object CarHotspotTools {
         androidAccess(context), timeoutMillis, pollIntervalMillis, pause, cancelled,
     )
 
+    /** User-requested stop of the device-owned AP, keeping its saved configuration. */
+    fun stop(
+        context: Context,
+        timeoutMillis: Long = DEFAULT_START_TIMEOUT_MILLIS,
+        pollIntervalMillis: Long = DEFAULT_POLL_INTERVAL_MILLIS,
+        pause: (Long) -> Unit = { Thread.sleep(it) },
+        cancelled: () -> Boolean = { false },
+    ): CarHotspotStopResult = try {
+        stop(androidAccess(context), timeoutMillis, pollIntervalMillis, pause, cancelled)
+    } catch (error: Throwable) {
+        CarHotspotStopResult.Failure(error.toHotspotFailure())
+    }
+
+    internal fun stop(
+        access: CarHotspotWifiAccess,
+        timeoutMillis: Long,
+        pollIntervalMillis: Long,
+        pause: (Long) -> Unit,
+        cancelled: () -> Boolean = { false },
+        nowMillis: () -> Long = SystemClock::elapsedRealtime,
+    ): CarHotspotStopResult {
+        require(timeoutMillis >= 0L)
+        require(pollIntervalMillis > 0L)
+        val initialState = try {
+            access.readState()?.let(::stateFromRaw)
+        } catch (error: Throwable) {
+            return CarHotspotStopResult.Failure(error.toHotspotFailure())
+        } ?: return CarHotspotStopResult.Failure(CarHotspotFailure.STATE_UNAVAILABLE)
+        when (initialState) {
+            CarHotspotState.DISABLED -> return CarHotspotStopResult.AlreadyDisabled
+            CarHotspotState.UNKNOWN -> return CarHotspotStopResult.Failure(CarHotspotFailure.STATE_UNAVAILABLE)
+            CarHotspotState.ENABLING, CarHotspotState.DISABLING ->
+                return CarHotspotStopResult.Failure(CarHotspotFailure.STATE_TRANSITION_IN_PROGRESS)
+            CarHotspotState.ENABLED, CarHotspotState.FAILED -> Unit
+        }
+        if (cancelled()) return CarHotspotStopResult.Failure(CarHotspotFailure.OPERATION_CANCELLED)
+        val configuration = try {
+            access.readConfiguration()
+        } catch (_: CarHotspotConfigurationException) {
+            null
+        } catch (error: Throwable) {
+            return CarHotspotStopResult.Failure(error.toHotspotFailure())
+        }
+        val accepted = try {
+            access.requestDisable(configuration)
+        } catch (error: Throwable) {
+            return CarHotspotStopResult.Failure(error.toHotspotFailure())
+        }
+        if (!accepted) return CarHotspotStopResult.Failure(CarHotspotFailure.REQUEST_REJECTED)
+        val startedAt = nowMillis()
+        val deadline = if (Long.MAX_VALUE - startedAt < timeoutMillis) Long.MAX_VALUE else startedAt + timeoutMillis
+        while (nowMillis() < deadline) {
+            if (cancelled()) return CarHotspotStopResult.Failure(CarHotspotFailure.OPERATION_CANCELLED)
+            try {
+                pause(minOf(pollIntervalMillis, (deadline - nowMillis()).coerceAtLeast(1L)))
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return CarHotspotStopResult.Failure(CarHotspotFailure.OPERATION_INTERRUPTED)
+            }
+            val state = try {
+                access.readState()?.let(::stateFromRaw)
+            } catch (error: Throwable) {
+                return CarHotspotStopResult.Failure(error.toHotspotFailure())
+            } ?: return CarHotspotStopResult.Failure(CarHotspotFailure.STATE_UNAVAILABLE)
+            when (state) {
+                CarHotspotState.DISABLED -> return CarHotspotStopResult.Disabled
+                CarHotspotState.FAILED ->
+                    return CarHotspotStopResult.Failure(CarHotspotFailure.FIRMWARE_REPORTED_FAILURE)
+                CarHotspotState.UNKNOWN ->
+                    return CarHotspotStopResult.Failure(CarHotspotFailure.STATE_UNAVAILABLE)
+                CarHotspotState.ENABLED, CarHotspotState.ENABLING, CarHotspotState.DISABLING -> Unit
+            }
+        }
+        return CarHotspotStopResult.Failure(CarHotspotFailure.START_TIMED_OUT)
+    }
+
     internal fun read(access: CarHotspotWifiAccess): CarHotspotReadResult {
         return try {
             val configuration = access.readConfiguration()
@@ -262,6 +338,12 @@ sealed class CarHotspotReadResult {
     class Failure(val reason: CarHotspotFailure) : CarHotspotReadResult()
 }
 
+sealed class CarHotspotStopResult {
+    object AlreadyDisabled : CarHotspotStopResult()
+    object Disabled : CarHotspotStopResult()
+    class Failure(val reason: CarHotspotFailure) : CarHotspotStopResult()
+}
+
 sealed class CarHotspotStartResult {
     class AlreadyEnabled(val configuration: CarHotspotConfiguration) : CarHotspotStartResult()
     class Enabled(val configuration: CarHotspotConfiguration) : CarHotspotStartResult()
@@ -287,6 +369,9 @@ internal interface CarHotspotWifiAccess {
     fun readConfiguration(): CarHotspotConfiguration?
     fun readState(): Int?
     fun requestEnable(configuration: CarHotspotConfiguration): Boolean
+
+    /** Requests AP shutdown; [configuration] is the firmware's own object when readable. */
+    fun requestDisable(configuration: CarHotspotConfiguration?): Boolean = false
 }
 
 @SuppressLint("PrivateApi")
@@ -316,6 +401,15 @@ private class AndroidCarHotspotWifiAccess(
             java.lang.Boolean.TYPE,
         )
         return method.invoke(wifiManager, configuration.nativeConfiguration, true) as? Boolean ?: false
+    }
+
+    override fun requestDisable(configuration: CarHotspotConfiguration?): Boolean {
+        val method = WifiManager::class.java.getMethod(
+            "setWifiApEnabled",
+            WifiConfiguration::class.java,
+            java.lang.Boolean.TYPE,
+        )
+        return method.invoke(wifiManager, configuration?.nativeConfiguration, false) as? Boolean ?: false
     }
 
 }

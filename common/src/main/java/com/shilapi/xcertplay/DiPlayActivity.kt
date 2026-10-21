@@ -49,6 +49,7 @@ import com.shilapi.xcertplay.network.CarHotspotFailure
 import com.shilapi.xcertplay.network.CarHotspotReadResult
 import com.shilapi.xcertplay.network.CarHotspotStartResult
 import com.shilapi.xcertplay.network.CarHotspotState
+import com.shilapi.xcertplay.network.CarHotspotStopResult
 import com.shilapi.xcertplay.network.CarHotspotTools
 import com.shilapi.xcertplay.orchestration.ManualHotspotBand
 import com.shilapi.xcertplay.orchestration.ManualHotspotSecurity
@@ -62,11 +63,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
-private enum class CarHotspotAction { READ_CONFIGURATION, ENABLE, READ_STATE }
+private enum class CarHotspotAction { READ_CONFIGURATION, ENABLE, DISABLE, READ_STATE }
 
 private sealed class CarHotspotActionResult {
     class Read(val result: CarHotspotReadResult) : CarHotspotActionResult()
     class Start(val result: CarHotspotStartResult) : CarHotspotActionResult()
+    class Stop(val result: CarHotspotStopResult) : CarHotspotActionResult()
     class State(val state: CarHotspotState?) : CarHotspotActionResult()
 }
 
@@ -97,6 +99,12 @@ class DiPlayActivity : ComponentActivity() {
     private var hotspotToolsStatusView: TextView? = null
     private var hotspotToolsMessage: String? = null
     private var carHotspotEnabledSnapshot: Boolean? = null
+    private var hotspotButton: Button? = null
+    /** ENABLE/DISABLE started from the home 「启动热点」 button; drives its label and toasts. */
+    private var homeHotspotPending: CarHotspotAction? = null
+    /** Home button used from Wi-Fi Direct / local-only mode: switch to car-hotspot mode once the AP is up. */
+    private var homeHotspotSwitchToManual = false
+    private var hotspotStatePollTicks = 0
     private var hotspotOperationGeneration = 0
     private var hotspotOperationTimeout: Runnable? = null
     private var hotspotTimedOutGeneration: Int? = null
@@ -106,7 +114,17 @@ class DiPlayActivity : ComponentActivity() {
         connect(notificationTransport)
     }
     private val tick = object : Runnable {
-        override fun run() { refreshStatus(); handler.postDelayed(this, 1000) }
+        override fun run() {
+            refreshStatus()
+            // Keep the home hotspot button honest if the AP is toggled from the car's own settings.
+            if (page == "home" && ++hotspotStatePollTicks >= 5) {
+                hotspotStatePollTicks = 0
+                if (homeHotspotPending == null && !hotspotOperationBusy.get()) {
+                    submitCarHotspotAction(CarHotspotAction.READ_STATE)
+                }
+            }
+            handler.postDelayed(this, 1000)
+        }
     }
     private val bluetoothPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) choosePhone() else permissionHelp(getString(R.string.nearby_devices), getString(R.string.allow_nearby_devices_so_diplay_can_connect_to_your_paired))
@@ -203,9 +221,8 @@ class DiPlayActivity : ComponentActivity() {
                 handler.post { connect(AirPlayPersistence.loadWirelessEnabled(this)) }
             }
         }
-        if (AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL) {
-            submitCarHotspotAction(CarHotspotAction.READ_STATE)
-        }
+        // Every mode reads it now: the home hotspot button shows the AP state regardless of link mode.
+        submitCarHotspotAction(CarHotspotAction.READ_STATE)
     }
     override fun onPause() { activityResumed = false; handler.removeCallbacks(tick); super.onPause() }
 
@@ -222,6 +239,7 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun render() {
         status = null; connectButton = null; disconnectButton = null; lastRunning = null
+        hotspotButton = null
         hotspotToolsStatusView = null
         val scroll = ScrollView(this).apply { setBackgroundColor(BG); isFillViewport = true; clipToPadding = false }
         val content = column().apply { setPadding(dp(32), dp(24), dp(32), dp(32)) }
@@ -267,6 +285,9 @@ class DiPlayActivity : ComponentActivity() {
             else connect(true)
         }
         card.addView(connectButton, matchButton())
+        hotspotButton = button(getString(R.string.home_hotspot_start), false) { onHomeHotspotClicked() }
+        card.addView(hotspotButton, matchButton(10, 56))
+        updateHotspotButton()
         val connectionHint = when (AirPlayPersistence.loadWirelessHotspotMode(this)) {
             WirelessHotspotMode.MANUAL -> getString(R.string.hotspot_hint_manual)
             WirelessHotspotMode.LOCAL_ONLY_HOTSPOT -> getString(R.string.hotspot_hint_local)
@@ -627,6 +648,12 @@ class DiPlayActivity : ComponentActivity() {
         if (!hotspotOperationBusy.compareAndSet(false, true)) {
             if (action != CarHotspotAction.READ_STATE) {
                 setHotspotToolsMessage(getString(R.string.hotspot_tools_busy))
+                if (homeHotspotPending == action) {
+                    homeHotspotPending = null
+                    homeHotspotSwitchToManual = false
+                    updateHotspotButton()
+                    toast(getString(R.string.hotspot_tools_busy))
+                }
             }
             return
         }
@@ -648,6 +675,12 @@ class DiPlayActivity : ComponentActivity() {
                 owner.hotspotTimedOutGeneration = requestId
                 if (action != CarHotspotAction.READ_STATE) {
                     owner.setHotspotToolsMessage(owner.getString(R.string.hotspot_tools_pending_timeout))
+                    if (owner.homeHotspotPending == action) {
+                        owner.homeHotspotPending = null
+                        owner.homeHotspotSwitchToManual = false
+                        owner.updateHotspotButton()
+                        owner.toast(owner.getString(R.string.hotspot_tools_pending_timeout))
+                    }
                 }
             }
         }
@@ -668,6 +701,9 @@ class DiPlayActivity : ComponentActivity() {
                             cancelled = cancelled::get,
                         ),
                     )
+                    CarHotspotAction.DISABLE -> CarHotspotActionResult.Stop(
+                        CarHotspotTools.stop(appContext, cancelled = cancelled::get),
+                    )
                     CarHotspotAction.READ_STATE -> CarHotspotActionResult.State(
                         CarHotspotTools.readState(appContext),
                     )
@@ -679,6 +715,9 @@ class DiPlayActivity : ComponentActivity() {
                     )
                     CarHotspotAction.ENABLE -> CarHotspotActionResult.Start(
                         CarHotspotStartResult.Failure(CarHotspotFailure.OPERATION_FAILED),
+                    )
+                    CarHotspotAction.DISABLE -> CarHotspotActionResult.Stop(
+                        CarHotspotStopResult.Failure(CarHotspotFailure.OPERATION_FAILED),
                     )
                     CarHotspotAction.READ_STATE -> CarHotspotActionResult.State(null)
                 }
@@ -698,6 +737,12 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun completeCarHotspotAction(outcome: CarHotspotActionResult) {
+        val fromHome = homeHotspotPending != null &&
+            (outcome is CarHotspotActionResult.Start || outcome is CarHotspotActionResult.Stop)
+        if (fromHome) {
+            completeHomeHotspotAction(outcome)
+            return
+        }
         when (outcome) {
             is CarHotspotActionResult.Read -> when (val result = outcome.result) {
                 is CarHotspotReadResult.Available -> {
@@ -724,15 +769,158 @@ class DiPlayActivity : ComponentActivity() {
                 is CarHotspotStartResult.Failure ->
                     setHotspotToolsMessage(hotspotFailureMessage(result.reason))
             }
+            is CarHotspotActionResult.Stop -> when (val result = outcome.result) {
+                CarHotspotStopResult.AlreadyDisabled, CarHotspotStopResult.Disabled -> {
+                    carHotspotEnabledSnapshot = false
+                    setHotspotToolsMessage(getString(R.string.home_hotspot_stopped_toast))
+                }
+                is CarHotspotStopResult.Failure ->
+                    setHotspotToolsMessage(hotspotFailureMessage(result.reason))
+            }
             is CarHotspotActionResult.State -> {
                 val wasEnabled = carHotspotEnabledSnapshot
                 carHotspotEnabledSnapshot = outcome.state?.let { it == CarHotspotState.ENABLED }
-                if (wasEnabled != carHotspotEnabledSnapshot &&
-                    (page == "home" || page == "settings" || page == "connection")) {
-                    render()
+                if (wasEnabled != carHotspotEnabledSnapshot) {
+                    // MANUAL mode shows a hotspot-off warning on these pages; other modes only need the button label.
+                    if (AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL &&
+                        (page == "home" || page == "settings" || page == "connection")) {
+                        render()
+                    } else {
+                        updateHotspotButton()
+                    }
                 }
             }
         }
+    }
+
+    // ---- Home 「启动热点」 button -------------------------------------------------------------
+
+    private fun updateHotspotButton() {
+        val button = hotspotButton ?: return
+        val enabled = carHotspotEnabledSnapshot == true
+        button.text = when {
+            homeHotspotPending == CarHotspotAction.ENABLE -> getString(R.string.home_hotspot_starting)
+            homeHotspotPending == CarHotspotAction.DISABLE -> getString(R.string.home_hotspot_stopping)
+            enabled -> {
+                val ssid = AirPlayPersistence.loadManualHotspotSsid(this).trim().removeSurrounding("\"")
+                if (ssid.isEmpty()) getString(R.string.home_hotspot_on)
+                else getString(R.string.home_hotspot_on_ssid, ssid)
+            }
+            else -> getString(R.string.home_hotspot_start)
+        }
+        button.isEnabled = homeHotspotPending == null
+        button.contentDescription = if (enabled && homeHotspotPending == null) {
+            "${button.text}. ${getString(R.string.home_hotspot_stop)}"
+        } else {
+            button.text
+        }
+    }
+
+    private fun onHomeHotspotClicked() {
+        if (homeHotspotPending != null) return
+        if (hotspotOperationBusy.get()) {
+            toast(getString(R.string.hotspot_tools_busy))
+            return
+        }
+        val mode = AirPlayPersistence.loadWirelessHotspotMode(this)
+        when {
+            carHotspotEnabledSnapshot == true -> confirmStopHomeHotspot()
+            mode == WirelessHotspotMode.MANUAL -> AlertDialog.Builder(this)
+                .setTitle(getString(R.string.hotspot_tools_enable_title))
+                .setMessage(getString(R.string.hotspot_tools_enable_warning))
+                .setPositiveButton(getString(R.string.home_hotspot_start)) { _, _ -> startHomeHotspot(false) }
+                .setNeutralButton(getString(R.string.home_hotspot_open_settings)) { _, _ -> openCarWifiSettings() }
+                .setNegativeButton(getString(R.string.cancel), null)
+                .show()
+            else -> AlertDialog.Builder(this)
+                // Wi-Fi Direct / local-only create a fresh per-session network on Connect phone, and the car
+                // SoftAP would take the Wi-Fi radio those modes need, so starting it means changing link mode.
+                .setTitle(getString(R.string.home_hotspot_switch_title))
+                .setMessage(getString(R.string.home_hotspot_switch_message))
+                .setPositiveButton(getString(R.string.home_hotspot_switch_confirm)) { _, _ -> startHomeHotspot(true) }
+                .setNegativeButton(getString(R.string.cancel), null)
+                .show()
+        }
+    }
+
+    private fun startHomeHotspot(switchToManual: Boolean) {
+        homeHotspotPending = CarHotspotAction.ENABLE
+        homeHotspotSwitchToManual = switchToManual
+        updateHotspotButton()
+        submitCarHotspotAction(CarHotspotAction.ENABLE)
+    }
+
+    private fun confirmStopHomeHotspot() {
+        val manual = AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.home_hotspot_stop_title))
+            .setMessage(getString(
+                if (manual && CarPlayBackgroundSession.hasSession()) R.string.home_hotspot_stop_message_session
+                else R.string.home_hotspot_stop_message,
+            ))
+            .setPositiveButton(getString(R.string.home_hotspot_stop)) { _, _ ->
+                homeHotspotPending = CarHotspotAction.DISABLE
+                homeHotspotSwitchToManual = false
+                updateHotspotButton()
+                submitCarHotspotAction(CarHotspotAction.DISABLE)
+            }
+            .setNeutralButton(getString(R.string.home_hotspot_open_settings)) { _, _ -> openCarWifiSettings() }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun completeHomeHotspotAction(outcome: CarHotspotActionResult) {
+        val switchToManual = homeHotspotSwitchToManual
+        homeHotspotPending = null
+        homeHotspotSwitchToManual = false
+        var rerender = false
+        when (outcome) {
+            is CarHotspotActionResult.Start -> {
+                val configuration = when (val result = outcome.result) {
+                    is CarHotspotStartResult.AlreadyEnabled -> result.configuration
+                    is CarHotspotStartResult.Enabled -> result.configuration
+                    is CarHotspotStartResult.Failure -> null
+                }
+                val failure = (outcome.result as? CarHotspotStartResult.Failure)?.reason
+                if (configuration != null) {
+                    val wasOff = carHotspotEnabledSnapshot != true
+                    carHotspotEnabledSnapshot = true
+                    persistCarHotspotConfiguration(configuration)
+                    pendingCarHotspotSetup = false
+                    if (switchToManual &&
+                        AirPlayPersistence.loadWirelessHotspotMode(this) != WirelessHotspotMode.MANUAL) {
+                        // Same persistence as choosing "Car hotspot" under connection setup; used from the next Connect.
+                        AirPlayPersistence.saveWirelessHotspotMode(this, WirelessHotspotMode.MANUAL)
+                        rerender = true
+                    }
+                    if (wasOff && AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL) {
+                        rerender = true // drop the "car hotspot is off" warning
+                    }
+                    val message = getString(R.string.home_hotspot_started_toast, configuration.ssid.removeSurrounding("\""))
+                    setHotspotToolsMessage(message)
+                    toast(message)
+                } else if (failure != null) {
+                    val message = getString(R.string.home_hotspot_failed_toast, hotspotFailureMessage(failure))
+                    setHotspotToolsMessage(message)
+                    toast(message)
+                }
+            }
+            is CarHotspotActionResult.Stop -> when (val result = outcome.result) {
+                CarHotspotStopResult.AlreadyDisabled, CarHotspotStopResult.Disabled -> {
+                    carHotspotEnabledSnapshot = false
+                    if (AirPlayPersistence.loadWirelessHotspotMode(this) == WirelessHotspotMode.MANUAL) rerender = true
+                    setHotspotToolsMessage(getString(R.string.home_hotspot_stopped_toast))
+                    toast(getString(R.string.home_hotspot_stopped_toast))
+                }
+                is CarHotspotStopResult.Failure -> {
+                    val message = getString(R.string.home_hotspot_failed_toast, hotspotFailureMessage(result.reason))
+                    setHotspotToolsMessage(message)
+                    toast(message)
+                }
+            }
+            else -> Unit
+        }
+        if (rerender && page == "home") render() else updateHotspotButton()
     }
 
     private fun persistCarHotspotConfiguration(configuration: CarHotspotConfiguration) {

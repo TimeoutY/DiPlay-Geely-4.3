@@ -541,4 +541,21 @@
     <string name="legacy_report_failed">用户存储根目录不可用或不可写，请检查存储后重试。</string>
     <string name="legacy_report_retry">重试</string>
     <string name="geely_bt_connection_status_note">已选择 H52 原厂连接通路。请在主页选择已通过原厂界面配对的 iPhone，再尝试连接。这些状态不能证明无线 CarPlay 已连通。</string>
+    <!-- 首页「启动热点」按钮 -->
+    <string name="home_hotspot_start">启动热点</string>
+    <string name="home_hotspot_starting">正在启动热点…</string>
+    <string name="home_hotspot_stopping">正在关闭热点…</string>
+    <string name="home_hotspot_on">热点已开启 · 点按关闭</string>
+    <string name="home_hotspot_on_ssid">热点已开启 · %1$s</string>
+    <string name="home_hotspot_stop">停止热点</string>
+    <string name="home_hotspot_open_settings">热点设置</string>
+    <string name="home_hotspot_stop_title">关闭车机热点？</string>
+    <string name="home_hotspot_stop_message">将关闭车机 Wi‑Fi 热点。在重新开启之前，「车机热点」方式的无线 CarPlay 无法连接。</string>
+    <string name="home_hotspot_stop_message_session">将关闭车机 Wi‑Fi 热点，当前的无线 CarPlay 连接会断开。</string>
+    <string name="home_hotspot_switch_title">改用车机热点？</string>
+    <string name="home_hotspot_switch_message">当前无线方式（Wi‑Fi 直连 / 本地热点）会在点「连接手机」时自动建立专用网络，不需要单独开热点。开启车机自带热点后，DiPlay 之后的连接将改用「车机热点」方式，且可能关闭车机当前的 Wi‑Fi 客户端连接。是否继续？</string>
+    <string name="home_hotspot_switch_confirm">切换并启动</string>
+    <string name="home_hotspot_started_toast">车机热点已开启：%1$s</string>
+    <string name="home_hotspot_stopped_toast">车机热点已关闭</string>
+    <string name="home_hotspot_failed_toast">热点操作失败：%1$s</string>
 </resources>

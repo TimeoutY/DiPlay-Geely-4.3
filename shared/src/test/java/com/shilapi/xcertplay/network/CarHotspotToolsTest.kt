@@ -198,6 +198,37 @@ class CarHotspotToolsTest {
         )
     }
 
+    @Test
+    fun stopRequestsDisableOnceAndWaitsForDisabledState() {
+        val access = FakeWifiAccess(configuration(), listOf(13, 10, 11))
+        var clock = 0L
+        val result = CarHotspotTools.stop(access, 5_000L, 500L, pause = { clock += it }, nowMillis = { clock })
+        assertSame(CarHotspotStopResult.Disabled, result)
+        assertEquals(1, access.disableRequests)
+        assertSame(access.expectedConfiguration.nativeConfiguration, access.configurationPassedToDisable)
+    }
+
+    @Test
+    fun stopLeavesADisabledHotspotAlone() {
+        val access = FakeWifiAccess(configuration(), listOf(11))
+        val result = CarHotspotTools.stop(access, 5_000L, 500L, pause = {})
+        assertSame(CarHotspotStopResult.AlreadyDisabled, result)
+        assertEquals(0, access.disableRequests)
+    }
+
+    @Test
+    fun stopReportsRejectedRequestAndTimeout() {
+        val rejected = FakeWifiAccess(configuration(), listOf(13)).apply { acceptRequest = false }
+        val rejectedResult = CarHotspotTools.stop(rejected, 5_000L, 500L, pause = {})
+        assertEquals(CarHotspotFailure.REQUEST_REJECTED, (rejectedResult as CarHotspotStopResult.Failure).reason)
+
+        val stuck = FakeWifiAccess(configuration(), listOf(13))
+        var clock = 0L
+        val stuckResult = CarHotspotTools.stop(stuck, 2_000L, 500L, pause = { clock += it }, nowMillis = { clock })
+        assertEquals(CarHotspotFailure.START_TIMED_OUT, (stuckResult as CarHotspotStopResult.Failure).reason)
+        assertEquals(1, stuck.disableRequests)
+    }
+
     private fun configuration(): CarHotspotConfiguration = CarHotspotConfiguration(
         ssid = "head unit",
         passphrase = "secret-not-logged",
@@ -233,6 +264,15 @@ class CarHotspotToolsTest {
         override fun readState(): Int? {
             stateReads++
             return states.getOrNull(nextState++) ?: states.lastOrNull()
+        }
+
+        var disableRequests = 0
+        var configurationPassedToDisable: Any? = null
+
+        override fun requestDisable(configuration: CarHotspotConfiguration?): Boolean {
+            disableRequests++
+            configurationPassedToDisable = configuration?.nativeConfiguration
+            return acceptRequest
         }
 
         override fun requestEnable(configuration: CarHotspotConfiguration): Boolean {
