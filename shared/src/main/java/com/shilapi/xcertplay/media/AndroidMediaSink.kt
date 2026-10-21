@@ -81,6 +81,19 @@ internal class AudioFocusCoordinator(
         }
     }
 
+    /** Volume/mode facts for logcat: a silent head unit shows here as volume 0, wrong mode, or no focus. */
+    fun streamSnapshot(streamType: Int): String {
+        val audio = manager ?: return "audioManager=null"
+        val volume = runCatching { audio.getStreamVolume(streamType) }.getOrNull()
+        val max = runCatching { audio.getStreamMaxVolume(streamType) }.getOrNull()
+        // AudioManager.isStreamMute is hidden before API 23.
+        val muted = runCatching {
+            AudioManager::class.java.getMethod("isStreamMute", Integer.TYPE).invoke(audio, streamType) as? Boolean
+        }.getOrNull()
+        return "stream=$streamType volume=$volume/$max muted=$muted mode=${runCatching { audio.mode }.getOrNull()} " +
+            "musicActive=${runCatching { audio.isMusicActive }.getOrNull()} sinkFocus=${if (enabled) "on" else "off"}"
+    }
+
     @Synchronized
     fun acquire(track: AudioTrack, channel: AudioChannel, attributes: Any?, legacyStreamType: Int) {
         if (separateGeelyFocus) {
@@ -1522,6 +1535,11 @@ private class AudioRenderer(
         underrunsAtPlaybackStart = PortableAudio.underrunCount(track)
         track.play()
         playbackStarted = true
+        val line = "audio play() audioType=${format.audioType} channel=$mappedChannel " +
+            "trackStream=$legacyTrackStreamType trackState=${track.state} playState=${track.playState} " +
+            audioFocusCoordinator.streamSnapshot(legacyTrackStreamType)
+        Log.i(STATS_TAG, line)
+        runCatching { report(line) }
     }
 
     private fun maintainPlaybackBuffer() {

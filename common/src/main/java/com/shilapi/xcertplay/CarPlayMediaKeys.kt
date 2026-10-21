@@ -48,11 +48,24 @@ internal object CarPlayMediaKeys {
     private val artworkCache = LinkedHashMap<Int, Bitmap?>()
 
     /**
-     * API 18/19 routes hardware keys through registerMediaButtonEventReceiver and RemoteControlClient.
-     * Key routing does not need audio focus there, so this object never requests focus itself:
-     * AudioFocusCoordinator is the single focus owner, and only when the user enabled audio focus
-     * (or the H52 Geely route is active). See issue #1.
+     * API 18/19: hardware keys use registerMediaButtonEventReceiver + RemoteControlClient, and
+     * STREAM_MUSIC AUDIOFOCUS_GAIN is what makes Geely GKUI (帝豪GL, 4.4.2) switch its audio source
+     * to this app. Without it the AudioTrack plays into a muted/unrouted source: no sound.
+     * Holding focus makes GKUI's Bluetooth-music app (AVRCP-connected to the same iPhone) lose
+     * focus, and it may pause the iPhone over AVRCP (issue #1); see [maybeUndoFocusPause].
      */
+    private val legacyFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        Log.i(FOCUS_TAG, "legacy focus change=${focusChangeName(change)} held=$legacyFocusHeld")
+        if (change == AudioManager.AUDIOFOCUS_LOSS) synchronized(this) {
+            legacyFocusHeld = false
+            // Someone else (radio, BT music, another app) took the source on purpose; never undo a pause.
+            autoResumeArmed = false
+        }
+    }
+    private var legacyFocusHeld = false
+    private var legacyFocusGrantedAt = 0L
+    private var autoResumeArmed = false
+    private var lastHardwareKeyAt = 0L
     private var mediaAudioStartedAt = 0L
     private var legacyReceiver: BroadcastReceiver? = null
     private var legacyPendingIntent: PendingIntent? = null
@@ -88,7 +101,11 @@ internal object CarPlayMediaKeys {
     }
 
     private fun onIphonePlaying(expected: CarPlayController, playing: Boolean) {
-        if (!playing) return
+        Log.i(FOCUS_TAG, "iPhone playing=$playing")
+        if (!playing) {
+            mainHandler.post { synchronized(this) { if (controller === expected) maybeUndoFocusPauseLocked(expected) } }
+            return
+        }
         mainHandler.post {
             synchronized(this) {
                 if (controller !== expected) return@synchronized
@@ -167,6 +184,7 @@ internal object CarPlayMediaKeys {
                             "${MEDIA_START_KEY_GUARD_MS}ms of CarPlay media start (head-unit source-switch echo)")
                         return
                     }
+                    synchronized(this@CarPlayMediaKeys) { lastHardwareKeyAt = SystemClock.elapsedRealtime() }
                     send(index, "legacyKeyEvent")
                 }
             }
@@ -217,13 +235,71 @@ internal object CarPlayMediaKeys {
             return
         }
         val context = appContext ?: return
-        // Below API 21 only the media-button receiver/RCC is needed for hardware keys. Do not
-        // request STREAM_MUSIC AUDIOFOCUS_GAIN here: it ignored the "audio focus" setting (off by
-        // default) and took permanent focus from the head unit's own media/Bluetooth-music app on
-        // every CarPlay music start. GKUI's Bluetooth music app is AVRCP-connected to the same
-        // iPhone and answers AUDIOFOCUS_LOSS by pausing it, so music stopped after ~1-2 s while
-        // navigation (which never takes focus) kept working. AudioFocusCoordinator owns focus.
         registerLegacyMediaButtons(context)
+        // H52 track coordinator owns vendor focus; a second MUSIC focus mutes that route (upstream P21).
+        if (AirPlayPersistence.loadGeelyAudioRouting(context)) {
+            Log.i(FOCUS_TAG, "legacy focus skipped: H52 Geely audio routing owns focus")
+            return
+        }
+        if (legacyFocusHeld) return
+        val audio = context.systemService(AudioManager::class.java, "audio") ?: run {
+            Log.w(FOCUS_TAG, "legacy focus: AudioManager unavailable")
+            return
+        }
+        // Restored after 0.2.13-H52-P21-hotspot-btn: without this request GKUI never routes
+        // STREAM_MUSIC from DiPlay, so CarPlay music was silent while the iPhone kept playing.
+        @Suppress("DEPRECATION")
+        val result = runCatching {
+            audio.requestAudioFocus(legacyFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+        }.getOrDefault(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+        legacyFocusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        if (legacyFocusHeld) {
+            legacyFocusGrantedAt = SystemClock.elapsedRealtime()
+            autoResumeArmed = true
+        }
+        Log.i(FOCUS_TAG, "legacy focus request stream=MUSIC gain=GAIN granted=$legacyFocusHeld " +
+            "musicVolume=${runCatching { audio.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull()}/" +
+            "${runCatching { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull()} " +
+            "mode=${runCatching { audio.mode }.getOrNull()} musicActive=${runCatching { audio.isMusicActive }.getOrNull()}")
+    }
+
+    /**
+     * Issue #1: right after we take focus, the head unit's Bluetooth-music app may pause the
+     * iPhone over AVRCP (or echo a pause key). That pause never passes through DiPlay, so undo it
+     * once: if the iPhone stops within [AUTO_RESUME_WINDOW_MS] of our focus grant, without a
+     * hardware key from the driver and without anyone taking focus from us, send PLAY once.
+     */
+    private fun maybeUndoFocusPauseLocked(expected: CarPlayController) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP || !autoResumeArmed || !legacyFocusHeld) return
+        val now = SystemClock.elapsedRealtime()
+        val sinceGrant = now - legacyFocusGrantedAt
+        if (sinceGrant > AUTO_RESUME_WINDOW_MS) {
+            autoResumeArmed = false
+            return
+        }
+        if (now - lastHardwareKeyAt < AUTO_RESUME_WINDOW_MS) {
+            Log.i(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant by a hardware key; leaving it paused")
+            autoResumeArmed = false
+            return
+        }
+        autoResumeArmed = false
+        Log.w(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant with no key press " +
+            "(head-unit AVRCP pause on focus loss); resuming once")
+        mainHandler.postDelayed({
+            val stillCurrent = synchronized(this) { controller === expected && legacyFocusHeld }
+            if (stillCurrent) {
+                val sent = expected.sendMediaButton(CarPlayMediaButton.PLAY)
+                Log.i(FOCUS_TAG, "auto-resume PLAY sent=$sent")
+            }
+        }, AUTO_RESUME_DELAY_MS)
+    }
+
+    private fun focusChangeName(change: Int): String = when (change) {
+        AudioManager.AUDIOFOCUS_GAIN -> "GAIN"
+        AudioManager.AUDIOFOCUS_LOSS -> "LOSS"
+        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> "LOSS_TRANSIENT"
+        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "LOSS_TRANSIENT_CAN_DUCK"
+        else -> change.toString()
     }
 
     /**
@@ -258,6 +334,13 @@ internal object CarPlayMediaKeys {
         artworkOwner = null
         artworkQueue.clear()
         unregisterLegacyMediaButtons()
+        if (legacyFocusHeld) {
+            @Suppress("DEPRECATION")
+            runCatching { appContext?.systemService(AudioManager::class.java, "audio")?.abandonAudioFocus(legacyFocusListener) }
+            Log.i(FOCUS_TAG, "legacy focus abandoned (session ended)")
+        }
+        legacyFocusHeld = false
+        autoResumeArmed = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) session?.close()
         session = null
         mediaAudioActive = false
@@ -304,6 +387,9 @@ internal object CarPlayMediaKeys {
     }
 
     private const val MEDIA_START_KEY_GUARD_MS = 2_500L
+    private const val FOCUS_TAG = "DiPlay-AudioFocus"
+    private const val AUTO_RESUME_WINDOW_MS = 6_000L
+    private const val AUTO_RESUME_DELAY_MS = 400L
     private const val MAX_ARTWORK_DIMENSION = 384
     private const val MAX_ARTWORK_SOURCE_DIMENSION = 8_192
     private const val MAX_CACHED_ARTWORK = 4

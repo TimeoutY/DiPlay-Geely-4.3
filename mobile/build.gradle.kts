@@ -18,8 +18,8 @@ android {
         // API 18 predates native multidex; keep the launcher installable on 4.3.
         multiDexEnabled = true
         targetSdk = 37
-        versionCode = 32
-        versionName = "0.2.13-H52-P21-hotspot-btn"
+        versionCode = 33
+        versionName = "0.2.13-H52-P21-sound-fix"
 
     }
 
