@@ -1,5 +1,7 @@
 # DiPlay · 吉利 Android 4.3 适配
 
+> 本仓库基于 [xikai6282/DiPlay-Geely-Android43](https://github.com/xikai6282/DiPlay-Geely-Android43) 继续开发，保留原项目的 GPL-3.0 许可与署名。
+
 面向博瑞 H52 / i.MX6 / API18 的 CarPlay 适配。**视频流畅度与触控优化、原厂免 root 桥接，以及音乐和导航声音修复，是这一轮迭代的主要成果。** 其他车型仍需独立验证。
 
 ## 下载与测试状态
