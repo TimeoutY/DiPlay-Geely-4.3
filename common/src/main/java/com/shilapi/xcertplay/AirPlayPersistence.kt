@@ -399,6 +399,14 @@ object AirPlayPersistence {
     fun loadAntiAutoPause(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("anti_auto_pause", true)
 
+    /** 性能统计 overlay over CarPlay (fps, decode time, jitter, touch latency). Off by default. */
+    fun loadPerfStatsOverlay(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("perf_stats_overlay", false)
+
+    fun savePerfStatsOverlay(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("perf_stats_overlay", enabled).apply()
+    }
+
     fun saveAntiAutoPause(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("anti_auto_pause", enabled).apply()
     }

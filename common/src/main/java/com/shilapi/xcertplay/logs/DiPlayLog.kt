@@ -36,6 +36,12 @@ object DiPlayLog {
     /** Lines stored directly while logcat was not (yet) readable; logcat replays them on start. */
     private var directLines = 0
     private const val MAX_LINE_CHARS = 1_200
+    /**
+     * Info and above only (plus Dalvik GC lines, which show GC pauses on 4.4). Debug/verbose lines
+     * are per-frame/per-packet chatter: parsing and storing them cost the weak head unit CPU and GC
+     * while CarPlay video ran, and they pushed useful lines out of the ring buffer.
+     */
+    private val LOGCAT_COMMAND = listOf("logcat", "-v", "time", "dalvikvm:D", "art:I", "*:I")
     /** "MM-dd HH:mm:ss.SSS" from `logcat -v time`; sorts lexically within a year. */
     private const val TIME_PREFIX = 18
     @Volatile private var lastStamp: String? = null
@@ -56,7 +62,7 @@ object DiPlayLog {
         while (attempt < 5) {
             attempt++
             try {
-                val process = ProcessBuilder("logcat", "-v", "time").redirectErrorStream(true).start()
+                val process = ProcessBuilder(LOGCAT_COMMAND).redirectErrorStream(true).start()
                 synchronized(this) { readerProcess = process }
                 BufferedReader(InputStreamReader(process.inputStream), 8 * 1024).use { reader ->
                     while (true) {

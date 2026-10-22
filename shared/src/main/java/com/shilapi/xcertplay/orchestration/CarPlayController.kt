@@ -428,13 +428,37 @@ class CarPlayController(
     fun sendTouch(contacts: List<AirPlayContact>): Boolean {
         if (closed) return false
         val session = activeSession ?: return false
+        val now = System.nanoTime()
+        synchronized(touchQueue) {
+            // A touch report is an absolute snapshot of all contacts. If the newest queued report is
+            // still unsent and this one only moves the same fingers, replace it: the iPhone gets the
+            // latest position instead of a backlog of stale MOVEs (slow touch on weak head units).
+            // Downs/ups never merge, so order and every press/release are preserved.
+            val last = touchQueue.peekLast()
+            if (last != null && last.session === session && TouchCoalescing.isMoveOf(last.contacts, contacts)) {
+                last.contacts = contacts
+                coalescedTouchMoves++
+                return true
+            }
+            touchQueue.addLast(PendingTouch(session, contacts, now))
+        }
         return try {
-            touchExecutor.execute { session.sendTouch(contacts) }
+            touchExecutor.execute {
+                val next = synchronized(touchQueue) { touchQueue.pollFirst() } ?: return@execute
+                next.session.sendTouch(next.contacts, next.queuedAtNs)
+            }
             true
         } catch (_: Exception) {
+            synchronized(touchQueue) { touchQueue.pollLast() }
             false
         }
     }
+
+    private class PendingTouch(val session: AirPlaySession, @Volatile var contacts: List<AirPlayContact>, val queuedAtNs: Long)
+    private val touchQueue = java.util.ArrayDeque<PendingTouch>()
+    /** MOVE reports merged into a newer one before sending (diagnostic). */
+    @Volatile var coalescedTouchMoves = 0L
+        private set
 
     /** Sends one CarPlay media-button press (an [com.shilapi.xcertplay.airplay.AirPlayHid] media index). */
     /** Opens Siri on the iPhone, as the car's voice button does in CarPlay. */

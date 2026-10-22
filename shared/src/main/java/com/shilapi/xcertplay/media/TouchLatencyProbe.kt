@@ -4,10 +4,22 @@ package com.shilapi.xcertplay.media
 internal object TouchLatencyProbe {
     @Volatile private var pendingTouchNs = 0L
     @Volatile var maxSendNs = 0L
+    /** Max time from the touch being handed to the controller until it was written to the socket. */
+    @Volatile private var maxEndToEndNs = 0L
+    @Volatile var lastWindowMaxEndToEndNs = 0L
+        private set
 
-    fun onTouchSent(sentAtNs: Long, sendDurationNs: Long) {
-        if (pendingTouchNs == 0L) pendingTouchNs = sentAtNs
+    fun onTouchSent(sentAtNs: Long, sendDurationNs: Long, queuedAtNs: Long = sentAtNs) {
+        if (pendingTouchNs == 0L) pendingTouchNs = queuedAtNs
         if (sendDurationNs > maxSendNs) maxSendNs = sendDurationNs
+        val endToEnd = sentAtNs + sendDurationNs - queuedAtNs
+        if (endToEnd > maxEndToEndNs) maxEndToEndNs = endToEnd
+    }
+
+    /** Called when a stats window closes. */
+    fun rollWindow() {
+        lastWindowMaxEndToEndNs = maxEndToEndNs
+        maxEndToEndNs = 0L
     }
 
     /** Returns touch-to-frame latency for the first frame after a touch, or -1. */

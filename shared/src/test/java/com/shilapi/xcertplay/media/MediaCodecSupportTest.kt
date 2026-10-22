@@ -37,6 +37,27 @@ class MediaCodecSupportTest {
     }
 
     @Test
+    fun inPlaceConversionMatchesCopyAndIsIdempotent() {
+        val first = byteArrayOf(0x40, 0x01)
+        val second = byteArrayOf(0x42, 0x01, 0x02)
+        val bytes = byteArrayOf(0, 0, 0, first.size.toByte()) + first +
+            byteArrayOf(0, 0, 0, second.size.toByte()) + second
+        val expected = MediaCodecSupport.toAnnexB(bytes.copyOf())
+        assertTrue(MediaCodecSupport.toAnnexBInPlace(bytes))
+        assertArrayEquals(expected, bytes)
+        // A mirror decoder fed the same (now converted) array must accept it unchanged.
+        assertTrue(MediaCodecSupport.toAnnexBInPlace(bytes))
+        assertArrayEquals(expected, bytes)
+    }
+
+    @Test
+    fun inPlaceConversionRejectsTruncatedUnits() {
+        val bad = byteArrayOf(0, 0, 0, 2, 0x41, 1, 0)
+        assertFalse(MediaCodecSupport.toAnnexBInPlace(bad))
+        assertArrayEquals(byteArrayOf(0, 0, 0, 2, 0x41, 1, 0), bad)
+    }
+
+    @Test
     fun hevcCodecSpecificDataBuildsAnnexBParameterSets() {
         val vps = byteArrayOf(0x40, 0x01)
         val sps = byteArrayOf(0x42, 0x01, 0x02)

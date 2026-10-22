@@ -382,6 +382,23 @@ class CarPlayHostActivity : ComponentActivity() {
     private var gestureStartY = 0f
     private val shuttingDown = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var perfStatsView: TextView? = null
+    private val perfStatsTick = object : Runnable {
+        override fun run() {
+            val view = perfStatsView ?: return
+            if (!AirPlayPersistence.loadPerfStatsOverlay(this@CarPlayHostActivity)) {
+                view.visibility = View.GONE
+                return
+            }
+            val summary = com.shilapi.xcertplay.media.VideoStatsBoard.summary
+            val fresh = android.os.SystemClock.elapsedRealtime() -
+                com.shilapi.xcertplay.media.VideoStatsBoard.updatedAtMs < 12_000L
+            view.text = if (summary != null && fresh) summary else "性能统计：等待视频…"
+            view.visibility = View.VISIBLE
+            view.bringToFront()
+            mainHandler.postDelayed(this, 1_000L)
+        }
+    }
     private val teardownExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val airPlayCommandExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val logLines = ArrayDeque<LogEntry>()
@@ -673,6 +690,8 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     override fun onResume() {
+        mainHandler.removeCallbacks(perfStatsTick)
+        mainHandler.post(perfStatsTick)
         super.onResume()
         if (syncTransport()) return
         val languagePreference = AppLocale.preference(this)
@@ -1005,6 +1024,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(perfStatsTick)
         clusterMonitor?.stop()
         mainHandler.removeCallbacks(hideIdleCenterMap)
         homeMonitor?.stop()
@@ -1054,6 +1074,17 @@ class CarPlayHostActivity : ComponentActivity() {
         com.shilapi.xcertplay.media.H52LegacySurface.install(this, root, video)
         root.addView(video, FrameLayout.LayoutParams(-1, -1))
         root.addView(gestureLayer, FrameLayout.LayoutParams(-1, -1))
+        // 性能统计: one photographable line over CarPlay (not clickable, so touches pass through).
+        perfStatsView = TextView(this).apply {
+            textSize = 13f
+            setTextColor(Color.rgb(255, 255, 160))
+            setBackgroundColor(Color.argb(170, 0, 0, 0))
+            setPadding(dp(6), dp(2), dp(6), dp(2))
+            visibility = View.GONE
+            isClickable = false
+            isFocusable = false
+        }
+        root.addView(perfStatsView, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.START))
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER

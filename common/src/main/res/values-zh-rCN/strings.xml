@@ -590,7 +590,9 @@
     <string name="session_focus_title">连接时预先占用音频焦点</string>
     <string name="session_focus_description">Android 4.x：iPhone 一连上就占用一次音乐焦点并保持整个会话，让车机蓝牙音乐在歌曲开始前就让出；关闭则在开始播放时才占用。</string>
     <string name="anti_autopause_title">防止音乐被自动暂停</string>
-    <string name="anti_autopause_description">开始播放或占用焦点后 2.5 秒内忽略播放/暂停键；占用焦点 6 秒内若车机在没有按键的情况下暂停了 iPhone，自动恢复播放一次。</string>
+    <string name="anti_autopause_description">开始播放、占用或失去焦点后 3 秒内忽略车机发来的播放/暂停键；iPhone 已暂停时忽略暂停键、已播放时忽略播放键；1 秒防抖，20 秒内连按 4 次视为循环并静默 30 秒。占用焦点 6 秒内若车机在无按键时暂停了 iPhone，自动恢复播放（每 5 分钟最多一次，焦点被反复抢占时不恢复）。</string>
     <string name="drop_bt_music_title">连接 CarPlay 时断开蓝牙音乐</string>
     <string name="drop_bt_music_description">无线 CarPlay 连上后，只断开 iPhone 的蓝牙音乐（A2DP），避免车机蓝牙音乐暂停 CarPlay。通话（HFP）保持连接。</string>
+    <string name="perf_stats_title">性能统计</string>
+    <string name="perf_stats_description">在 CarPlay 画面左上角显示一行统计（收到/显示/丢弃帧率、解码耗时、网络抖动、恢复次数、触摸延迟、码率），方便拍照反馈卡顿。</string>
 </resources>

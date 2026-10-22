@@ -251,8 +251,8 @@ internal class AudioFocusCoordinator(
     }
 
     @Suppress("DEPRECATION")
-    private fun requestAudioFocusLegacy(streamType: Int): Int = manager
-        ?.requestAudioFocus(listener, streamType, AudioManager.AUDIOFOCUS_GAIN)
+    private fun requestAudioFocusLegacy(streamType: Int, gain: Int = AudioManager.AUDIOFOCUS_GAIN): Int = manager
+        ?.requestAudioFocus(listener, streamType, gain)
         ?: AudioManager.AUDIOFOCUS_REQUEST_FAILED
 
     private fun refreshLegacyFocus() {
@@ -283,9 +283,17 @@ internal class AudioFocusCoordinator(
         // which may resume and then pause (and pause the iPhone over AVRCP) again.
         if (legacyOnlyFocusHeld && legacyOnlyFocusStream == primary.second) return
         if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
-        legacyOnlyFocusHeld = requestAudioFocusLegacy(primary.second) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        // While the session holds MUSIC focus, a Siri/phone stream must take focus *transiently*: a
+        // permanent GAIN sends LOSS to our own session listener, and on abandon AOSP 4.4 hands focus
+        // to the car's Bluetooth-music app (which then AVRCP-pauses the iPhone).
+        val gain = if (AudioSessionFocus.sessionOwnsMusicFocus && primary.first != AudioChannel.MEDIA) {
+            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+        } else {
+            AudioManager.AUDIOFOCUS_GAIN
+        }
+        legacyOnlyFocusHeld = requestAudioFocusLegacy(primary.second, gain) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         legacyOnlyFocusStream = if (legacyOnlyFocusHeld) primary.second else null
-        val line = "Audio: legacy focus requested channel=${primary.first} stream=${primary.second} " +
+        val line = "Audio: legacy focus requested channel=${primary.first} stream=${primary.second} gain=$gain " +
             "granted=$legacyOnlyFocusHeld activeTracks=${legacyOnlyTracks.size}"
         Log.i(TAG, line)
         runCatching { report(line) }
@@ -333,7 +341,7 @@ internal class AudioFocusCoordinator(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             val streamType = if (modernAudioSupported) ModernAudio.legacyStreamType(primary.attributes)
             else currentLegacyStreamType
-            legacyRequestHeld = requestAudioFocusLegacy(streamType) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            legacyRequestHeld = requestAudioFocusLegacy(streamType, gain) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
             return
         }
         val builderClass = Class.forName("android.media.AudioFocusRequest\$Builder")
@@ -721,7 +729,10 @@ private class VideoDecoder(
                             if (System.nanoTime() - job.receivedNs > MAX_FRAME_AGE_NS) {
                                 queue.discardFrames()
                                 recover("video backlog exceeded 250 ms")
-                            } else feed(job.nalus)
+                            } else {
+                                stats.onQueueWait(System.nanoTime() - job.receivedNs)
+                                feed(job.nalus)
+                            }
                         }
                         is VideoJob.SurfaceChanged -> changeSurface(job.surface)
                         is VideoJob.Resync -> recover("video queue overflow")
@@ -893,10 +904,11 @@ private class VideoDecoder(
     }
 
     private fun feed(nalus: ByteArray) {
-        val annexB = MediaCodecSupport.toAnnexB(nalus)
         val config = lastConfig ?: return
         if (outputSurface == null) return
-        if (annexB.isEmpty()) { recover("invalid video access unit"); return }
+        // In place: no per-frame copy (GC_FOR_ALLOC pauses stalled video and touch on 4.4).
+        if (!MediaCodecSupport.toAnnexBInPlace(nalus)) { recover("invalid video access unit"); return }
+        val annexB = nalus
         if (!referenceChain.accepts(annexB, config.codec)) {
             requestKeyFrameIfDue()
             return
@@ -946,26 +958,48 @@ private class VideoDecoder(
         requestKeyFrame()
     }
 
+    private val outputInfo = MediaCodec.BufferInfo()
+
+    /**
+     * Drains every ready output and renders only the newest one. When the weak decoder delivers
+     * several frames at once (after a burst or a slow frame), rendering each back-to-back only
+     * queues stale frames in SurfaceFlinger and delays the current picture by a vsync per frame;
+     * older ones are released unrendered and counted as dropped.
+     */
     private fun drainOutput(codec: MediaCodec) {
-        val info = MediaCodec.BufferInfo()
-        while (running) {
-            val index = codec.dequeueOutputBuffer(info, 0)
-            when {
-                index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
-                index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> logOutputFormat(codec.outputFormat)
-                index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
-                index >= 0 -> {
-                    val render = outputSurface != null
-                    codec.releaseOutputBuffer(index, render)
-                    if (render) stats.onRendered()
-                    if (render && !renderedFrameLogged) {
-                        renderedFrameLogged = true
-                        report("first frame rendered")
-                        Log.i(TAG, "video decoder rendered first frame bytes=${info.size}")
+        val info = outputInfo
+        var pending = -1
+        var pendingBytes = 0
+        try {
+            while (running) {
+                val index = codec.dequeueOutputBuffer(info, 0)
+                when {
+                    index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
+                    index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> logOutputFormat(codec.outputFormat)
+                    index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
+                    index >= 0 -> {
+                        stats.onDecoded(System.nanoTime() - info.presentationTimeUs * 1000)
+                        if (pending >= 0) {
+                            codec.releaseOutputBuffer(pending, false)
+                            stats.onDropped()
+                        }
+                        pending = index
+                        pendingBytes = info.size
+                        if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
                     }
-                    if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) return
+                    else -> return
                 }
-                else -> return
+            }
+        } finally {
+            if (pending >= 0) {
+                val render = outputSurface != null && running
+                codec.releaseOutputBuffer(pending, render)
+                if (render) stats.onRendered()
+                if (render && !renderedFrameLogged) {
+                    renderedFrameLogged = true
+                    report("first frame rendered")
+                    Log.i(TAG, "video decoder rendered first frame bytes=$pendingBytes")
+                }
             }
         }
     }
@@ -1010,7 +1044,11 @@ private class VideoDecoder(
 
     private companion object {
         const val TAG = "xcertplay-usb"
-        const val MAX_INPUT_SIZE = 8 * 1024 * 1024
+        /**
+         * 2 MB: a 1280x720 IDR at CarPlay bitrates is well under 1 MB. 8 MB per input buffer made
+         * 4.4 OMX decoders allocate tens of MB of input buffers on a RAM-starved head unit.
+         */
+        const val MAX_INPUT_SIZE = 2 * 1024 * 1024
         const val INPUT_TIMEOUT_US = 10_000L
         const val MAX_FRAME_AGE_NS = 250_000_000L
         val START_CODE = byteArrayOf(0x00, 0x00, 0x00, 0x01)

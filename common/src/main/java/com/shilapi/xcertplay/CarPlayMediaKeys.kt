@@ -56,21 +56,35 @@ internal object CarPlayMediaKeys {
      * focus, and it may pause the iPhone over AVRCP (issue #1); see [maybeUndoFocusPause].
      */
     private val legacyFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
-        DiPlayLog.note(FOCUS_TAG, "legacy focus change=${focusChangeName(change)} held=$legacyFocusHeld " +
-            "sessionActive=$sessionActive mediaActive=$mediaAudioActive")
-        if (change == AudioManager.AUDIOFOCUS_LOSS) synchronized(this) {
-            legacyFocusHeld = false
-            // Someone else (radio, BT music, another app) took the source on purpose; never undo a pause.
-            autoResumeArmed = false
+        synchronized(this) {
+            loopGuard.onFocusChange()
+            if (change == AudioManager.AUDIOFOCUS_LOSS) {
+                loopGuard.onFocusLoss()
+                legacyFocusHeld = false
+                // Someone else (radio, BT music, another app) took the source on purpose; never undo a pause.
+                autoResumeArmed = false
+            }
+            DiPlayLog.note(FOCUS_TAG, "legacy focus change=${focusChangeName(change)} held=$legacyFocusHeld " +
+                "sessionActive=$sessionActive mediaActive=$mediaAudioActive iPhonePlaying=$iphonePlaying" +
+                if (change == AudioManager.AUDIOFOCUS_LOSS && loopGuard.contention()) {
+                    " CONTENTION: another app took MUSIC focus ${PauseLoopGuard.CONTENTION_LOSSES}+ times in " +
+                        "${PauseLoopGuard.CONTENTION_WINDOW_MS / 1000}s (likely the car's Bluetooth-music app still " +
+                        "connected to the iPhone); re-requests slowed, auto-resume disabled"
+                } else "",
+                warn = change == AudioManager.AUDIOFOCUS_LOSS)
         }
     }
+    private val loopGuard = PauseLoopGuard { SystemClock.elapsedRealtime() }
+    /** Last play state reported by the iPhone (null = unknown). */
+    private var iphonePlaying: Boolean? = null
+    /** Focus was granted at least once in this session; later requests are re-requests after a loss. */
+    private var focusGrantedThisSession = false
     private var legacyFocusHeld = false
     /** True between AirPlay session active and session end (see CarPlayController.airPlaySessionListener). */
     private var sessionActive = false
     private var legacyFocusGrantedAt = 0L
     private var autoResumeArmed = false
-    /** Auto-resumes sent in this session; capped so a focus ping-pong with the car can't loop. */
-    private var autoResumeCount = 0
+    /** Last play/pause key we actually forwarded to the iPhone (a driver action). */
     private var lastHardwareKeyAt = 0L
     private var mediaAudioStartedAt = 0L
     private var legacyReceiver: BroadcastReceiver? = null
@@ -116,7 +130,7 @@ internal object CarPlayMediaKeys {
                 if (controller !== expected) return@synchronized
                 val context = appContext ?: return@synchronized
                 sessionActive = active
-                autoResumeCount = 0
+                focusGrantedThisSession = false
                 DiPlayLog.note(FOCUS_TAG, "AirPlay session ${if (active) "active" else "ended"} wireless=$wireless " +
                     "sessionFocus=${AirPlayPersistence.loadSessionAudioFocus(context)} " +
                     "antiAutoPause=${AirPlayPersistence.loadAntiAutoPause(context)}")
@@ -141,6 +155,7 @@ internal object CarPlayMediaKeys {
 
     private fun onIphonePlaying(expected: CarPlayController, playing: Boolean) {
         DiPlayLog.note(FOCUS_TAG, "iPhone playing=$playing")
+        synchronized(this) { if (controller === expected) iphonePlaying = playing }
         if (!playing) {
             mainHandler.post { synchronized(this) { if (controller === expected) maybeUndoFocusPauseLocked(expected) } }
             return
@@ -197,6 +212,7 @@ internal object CarPlayMediaKeys {
         if (controller == null) return
         if (active && !mediaAudioActive) {
             mediaAudioStartedAt = SystemClock.elapsedRealtime()
+            loopGuard.onMediaStart()
             DiPlayLog.note(FOCUS_TAG, "CarPlay media audio started focusHeld=$legacyFocusHeld")
         }
         mediaAudioActive = active
@@ -219,15 +235,36 @@ internal object CarPlayMediaKeys {
                 if (intent?.action != Intent.ACTION_MEDIA_BUTTON) return
                 @Suppress("DEPRECATION")
                 val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return
-                val index = CarPlayMediaButton.forKeyCode(event.keyCode) ?: return
+                val toggleIndex = CarPlayMediaButton.forKeyCode(event.keyCode) ?: return
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                    if (isStartupPlayPauseEcho(index)) {
-                        DiPlayLog.note(TAG, "ignored ${KeyEvent.keyCodeToString(event.keyCode)} within " +
-                            "${MEDIA_START_KEY_GUARD_MS}ms of CarPlay media start/focus grant (head-unit echo)", warn = true)
+                    val kind = when (event.keyCode) {
+                        KeyEvent.KEYCODE_MEDIA_PLAY -> PauseLoopGuard.Key.PLAY
+                        KeyEvent.KEYCODE_MEDIA_PAUSE -> PauseLoopGuard.Key.PAUSE
+                        else -> if (toggleIndex == CarPlayMediaButton.PLAY_PAUSE) PauseLoopGuard.Key.TOGGLE else null
+                    }
+                    val keyName = KeyEvent.keyCodeToString(event.keyCode)
+                    if (kind == null) {
+                        send(toggleIndex, "legacyKeyEvent")
                         return
                     }
-                    synchronized(this@CarPlayMediaKeys) { lastHardwareKeyAt = SystemClock.elapsedRealtime() }
-                    send(index, "legacyKeyEvent")
+                    val (decision, playing) = synchronized(this@CarPlayMediaKeys) {
+                        val ctx = appContext
+                        val guard = ctx != null && AirPlayPersistence.loadAntiAutoPause(ctx)
+                        loopGuard.keyDecision(kind, iphonePlaying, guard).also {
+                            if (it.send) lastHardwareKeyAt = SystemClock.elapsedRealtime()
+                        } to iphonePlaying
+                    }
+                    // Explicit PLAY/PAUSE keys stay explicit: a car-generated PAUSE while the iPhone is
+                    // already paused must not become a toggle that starts it again (qa1 pause/play loop).
+                    val index = when (kind) {
+                        PauseLoopGuard.Key.PLAY -> CarPlayMediaButton.PLAY
+                        PauseLoopGuard.Key.PAUSE -> CarPlayMediaButton.PAUSE
+                        PauseLoopGuard.Key.TOGGLE -> CarPlayMediaButton.PLAY_PAUSE
+                    }
+                    DiPlayLog.note(TAG, "key $keyName iPhonePlaying=$playing -> " +
+                        (if (decision.send) "SEND index=$index" else "IGNORED") + " (${decision.reason})",
+                        warn = !decision.send)
+                    if (decision.send) send(index, "legacyKeyEvent")
                 }
             }
         }
@@ -278,6 +315,14 @@ internal object CarPlayMediaKeys {
         }
         val context = appContext ?: return
         registerLegacyMediaButtons(context)
+        if (!legacyFocusHeld && focusGrantedThisSession) {
+            // Re-request after another app took focus: never a tight request/loss ping-pong with the
+            // car's Bluetooth-music app (each of our grants makes it AVRCP-pause the iPhone).
+            val decision = loopGuard.mayReRequestFocus()
+            DiPlayLog.note(FOCUS_TAG, "focus re-request after loss: ${if (decision.send) "YES" else "NO"} (${decision.reason})",
+                warn = !decision.send)
+            if (!decision.send) return
+        }
         // Session mode: focus was taken at connect; only a real permanent loss (or a failed
         // request) leaves it unheld, and then the next CarPlay media start must take it back,
         // otherwise GKUI keeps the previous source and CarPlay is silent.
@@ -308,8 +353,17 @@ internal object CarPlayMediaKeys {
         }.getOrDefault(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
         legacyFocusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         if (legacyFocusHeld) {
-            legacyFocusGrantedAt = SystemClock.elapsedRealtime()
-            autoResumeArmed = AirPlayPersistence.loadAntiAutoPause(context)
+            val now = SystemClock.elapsedRealtime()
+            legacyFocusGrantedAt = now
+            loopGuard.onFocusChange()
+            val reGrant = focusGrantedThisSession
+            focusGrantedThisSession = true
+            autoResumeArmed = AirPlayPersistence.loadAntiAutoPause(context) &&
+                PauseLoopGuard.autoResumeAllowed(now) && !loopGuard.contention()
+            DiPlayLog.note(FOCUS_TAG, "auto-resume ${if (autoResumeArmed) "armed" else "NOT armed"} for this grant " +
+                "(reGrant=$reGrant antiAutoPause=${AirPlayPersistence.loadAntiAutoPause(context)} " +
+                "lastResume=${if (PauseLoopGuard.autoResumeAllowed(now)) ">=5min ago" else "<5min ago"} " +
+                "contention=${loopGuard.contention()})")
         }
         DiPlayLog.note(FOCUS_TAG, "legacy focus request reason=$reason stream=MUSIC gain=GAIN granted=$legacyFocusHeld " +
             "musicVolume=${runCatching { audio.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull()}/" +
@@ -348,19 +402,23 @@ internal object CarPlayMediaKeys {
             return
         }
         autoResumeArmed = false
-        if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) {
-            DiPlayLog.note(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant; auto-resume limit " +
-                "($MAX_AUTO_RESUMES_PER_SESSION) reached this session, leaving it paused", warn = true)
+        if (!PauseLoopGuard.autoResumeAllowed(now) || loopGuard.contention()) {
+            DiPlayLog.note(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant; NOT resuming " +
+                "(auto-resume at most once per 5 min, never under focus contention)", warn = true)
             return
         }
-        autoResumeCount++
+        PauseLoopGuard.lastAutoResumeAt = now
         DiPlayLog.note(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant with no key press " +
             "(head-unit AVRCP pause on focus loss); resuming once", warn = true)
         mainHandler.postDelayed({
-            val stillCurrent = synchronized(this) { controller === expected && legacyFocusHeld }
-            if (stillCurrent) {
+            val (stillCurrent, playingNow) = synchronized(this) {
+                (controller === expected && legacyFocusHeld && lastHardwareKeyAt <= now) to iphonePlaying
+            }
+            if (stillCurrent && playingNow != true) {
                 val sent = expected.sendMediaButton(CarPlayMediaButton.PLAY)
                 DiPlayLog.note(FOCUS_TAG, "auto-resume PLAY sent=$sent")
+            } else {
+                DiPlayLog.note(FOCUS_TAG, "auto-resume cancelled (focus lost, key pressed, or already playing)")
             }
         }, AUTO_RESUME_DELAY_MS)
     }
@@ -371,24 +429,6 @@ internal object CarPlayMediaKeys {
         AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> "LOSS_TRANSIENT"
         AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> "LOSS_TRANSIENT_CAN_DUCK"
         else -> change.toString()
-    }
-
-    /**
-     * Some head units send a play/pause key to the top media-button receiver while they switch
-     * their own source away. The legacy key maps to a CarPlay toggle, which would pause the
-     * iPhone right after music starts, so such keys are ignored briefly after media starts.
-     */
-    @Synchronized
-    private fun isStartupPlayPauseEcho(index: Int): Boolean {
-        if (index != CarPlayMediaButton.PLAY_PAUSE && index != CarPlayMediaButton.PAUSE) return false
-        val context = appContext ?: return false
-        if (!AirPlayPersistence.loadAntiAutoPause(context)) return false
-        val now = SystemClock.elapsedRealtime()
-        val afterMediaStart = mediaAudioActive && mediaAudioStartedAt != 0L &&
-            now - mediaAudioStartedAt < MEDIA_START_KEY_GUARD_MS
-        val afterFocusGrant = legacyFocusHeld && legacyFocusGrantedAt != 0L &&
-            now - legacyFocusGrantedAt < MEDIA_START_KEY_GUARD_MS
-        return afterMediaStart || afterFocusGrant
     }
 
     private fun publishPlaybackStateLocked() {
@@ -417,6 +457,8 @@ internal object CarPlayMediaKeys {
         session = null
         mediaAudioActive = false
         mediaAudioStartedAt = 0L
+        iphonePlaying = null
+        focusGrantedThisSession = false
         nowPlaying = CarPlayNowPlaying()
         elapsedUpdatedAt = 0L
         artwork = null
@@ -458,11 +500,9 @@ internal object CarPlayMediaKeys {
         ).also { scaled -> if (scaled !== decoded) decoded.recycle() }
     }
 
-    private const val MEDIA_START_KEY_GUARD_MS = 2_500L
     private const val FOCUS_TAG = "DiPlay-AudioFocus"
     private const val AUTO_RESUME_WINDOW_MS = 6_000L
     private const val AUTO_RESUME_DELAY_MS = 400L
-    private const val MAX_AUTO_RESUMES_PER_SESSION = 2
     private const val MAX_ARTWORK_DIMENSION = 384
     private const val MAX_ARTWORK_SOURCE_DIMENSION = 8_192
     private const val MAX_CACHED_ARTWORK = 4

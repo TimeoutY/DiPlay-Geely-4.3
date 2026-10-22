@@ -85,6 +85,11 @@ class Api18CompatProbeActivity : Activity(), SurfaceHolder.Callback {
 
     private fun runProbes(surface: Surface) {
         val mode = intent.getStringExtra("probe") ?: "full"
+        if (mode == "video_bench") {
+            checkCase("VIDEO_BENCH") { videoBench(surface) }
+            complete()
+            return
+        }
         if (mode == "usb_native") {
             checkCase("USBFS_NATIVE_API18") {
                 check(LegacyUsbNative.configure(-1, 2) == -9)
@@ -545,6 +550,51 @@ class Api18CompatProbeActivity : Activity(), SurfaceHolder.Callback {
             }
         }
         if (mode == "full" || mode == "vpn") runOnUiThread { beginVpn() } else complete()
+    }
+
+    /**
+     * Stress bench: feeds a pushed AVCC clip (/data/local/tmp/bench.avcc + bench.frames) at the
+     * requested fps through the real AndroidMediaSink, restarting from the IDR when the decoder asks
+     * for a keyframe (as the iPhone does). Results come from the decoder's own stats lines.
+     */
+    private fun videoBench(surface: Surface): String {
+        val width = intent.getIntExtra("w", 1280)
+        val height = intent.getIntExtra("h", 720)
+        val fps = intent.getIntExtra("fps", 60)
+        val seconds = intent.getIntExtra("secs", 30)
+        val prefix = intent.getStringExtra("clip") ?: "/data/local/tmp/bench"
+        val frames = ArrayList<ByteArray>()
+        DataInputStream(java.io.File("$prefix.frames").inputStream().buffered()).use { input ->
+            while (input.available() > 0) {
+                val length = input.readInt()
+                frames += ByteArray(length).also { input.readFully(it) }
+            }
+        }
+        val restart = java.util.concurrent.atomic.AtomicBoolean(false)
+        val keyRequests = AtomicInteger()
+        val sink = AndroidMediaSink(surface, videoWidth = width, videoHeight = height, context = this)
+        try {
+            sink.setVideoDiagnosticHandler(110) { line("VIDEO $it") }
+            sink.setVideoRecoveryHandler(110) { keyRequests.incrementAndGet(); restart.set(true) }
+            sink.setSurface(110, surface)
+            sink.onVideoCodec(110, VideoCodec.H264)
+            sink.onVideoConfig(110, java.io.File("$prefix.avcc").readBytes())
+            val frameNs = 1_000_000_000L / fps
+            val start = System.nanoTime()
+            var next = start
+            var index = 0
+            var sent = 0
+            while (System.nanoTime() - start < seconds * 1_000_000_000L) {
+                if (restart.getAndSet(false) || index >= frames.size) index = 0
+                sink.onVideoFrame(110, frames[index++])
+                sent++
+                next += frameNs
+                val sleepNs = next - System.nanoTime()
+                if (sleepNs > 0) Thread.sleep(sleepNs / 1_000_000, (sleepNs % 1_000_000).toInt())
+            }
+            Thread.sleep(6_000)
+            return "sent=$sent keyframeRequests=${keyRequests.get()} size=${width}x$height fps=$fps secs=$seconds"
+        } finally { sink.close() }
     }
 
     private fun video(surface: Surface): String {

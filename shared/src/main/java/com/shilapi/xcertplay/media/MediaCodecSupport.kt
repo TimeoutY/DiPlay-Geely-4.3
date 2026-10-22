@@ -56,6 +56,34 @@ object MediaCodecSupport {
     }
 
     /** Converts CarPlay's length-prefixed NAL units into an Annex B byte stream. */
+    /**
+     * Converts 4-byte length-prefixed NAL units to Annex B in place (same size, no allocation) and
+     * returns whether [bytes] is now valid Annex B. Already-Annex-B input is left alone, so a second
+     * decoder (mirror) fed the same array sees the converted bytes. Synchronized on the array.
+     */
+    fun toAnnexBInPlace(bytes: ByteArray): Boolean = synchronized(bytes) {
+        if (bytes.size >= 4 && bytes[0] == 0.toByte() && bytes[1] == 0.toByte() &&
+            bytes[2] == 0.toByte() && bytes[3] == 1.toByte()
+        ) {
+            return@synchronized true
+        }
+        var offset = 0
+        while (offset + 4 <= bytes.size) {
+            val length = readU32Be(bytes, offset)
+            offset += 4
+            if (length <= 0 || length > bytes.size - offset) return@synchronized false
+            offset += length
+        }
+        if (offset == 0 || offset != bytes.size) return@synchronized false
+        offset = 0
+        while (offset + 4 <= bytes.size) {
+            val length = readU32Be(bytes, offset)
+            START_CODE.copyInto(bytes, offset)
+            offset += 4 + length
+        }
+        true
+    }
+
     fun toAnnexB(lengthPrefixed: ByteArray): ByteArray {
         if (lengthPrefixed.size >= 4 &&
             lengthPrefixed[0] == 0.toByte() &&

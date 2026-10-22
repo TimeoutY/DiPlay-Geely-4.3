@@ -17,6 +17,11 @@ internal class VideoStats(
     private var touchSamples = 0
     private var touchLatencySumNs = 0L
     private var maxTouchLatencyNs = 0L
+    private var dropped = 0
+    private var decodeSamples = 0
+    private var decodeSumNs = 0L
+    private var maxDecodeNs = 0L
+    private var maxQueueWaitNs = 0L
 
     @Synchronized fun onReceived(size: Int) {
         val now = nanoTime()
@@ -36,6 +41,22 @@ internal class VideoStats(
 
     @Synchronized fun onRendered() { rendered++ }
 
+    /** A decoded picture skipped because a newer one was already ready (stale frame not shown). */
+    @Synchronized fun onDropped() { dropped++ }
+
+    /** Time from queueInputBuffer to the decoded output buffer. */
+    @Synchronized fun onDecoded(latencyNs: Long) {
+        if (latencyNs < 0 || latencyNs > IDLE_GAP_NS) return
+        decodeSamples++
+        decodeSumNs += latencyNs
+        if (latencyNs > maxDecodeNs) maxDecodeNs = latencyNs
+    }
+
+    /** Time a received frame waited in the decode queue before it was fed to the codec. */
+    @Synchronized fun onQueueWait(waitNs: Long) {
+        if (waitNs > maxQueueWaitNs) maxQueueWaitNs = waitNs
+    }
+
     @Synchronized fun onRecovery() { recoveries++ }
 
     @Synchronized fun logIfDue(): String? {
@@ -52,11 +73,25 @@ internal class VideoStats(
             touchAvgMs, maxTouchLatencyNs / 1_000_000, touchSamples, TouchLatencyProbe.maxSendNs / 1_000_000,
         )
         TouchLatencyProbe.maxSendNs = 0
-        Log.i(TAG, line)
+        val decodeAvgMs = if (decodeSamples == 0) -1 else decodeSumNs / decodeSamples / 1_000_000
+        val full = line + " dropped=%d decode avg=%dms max=%dms queueWaitMax=%dms".format(
+            dropped, decodeAvgMs, maxDecodeNs / 1_000_000, maxQueueWaitNs / 1_000_000,
+        )
+        if (label.isEmpty()) {
+            TouchLatencyProbe.rollWindow()
+            VideoStatsBoard.publish(
+                rxFps = received / seconds, shownFps = rendered / seconds, droppedFps = dropped / seconds,
+                decodeAvgMs = decodeAvgMs, decodeMaxMs = maxDecodeNs / 1_000_000,
+                maxGapMs = maxArrivalGapNs / 1_000_000, recoveries = recoveries,
+                touchAvgMs = touchAvgMs, kbps = (bytes * 8 / 1000 / seconds).toLong(),
+            )
+        }
+        Log.i(TAG, full)
         windowStartNs = now
         received = 0; rendered = 0; recoveries = 0; bytes = 0; maxArrivalGapNs = 0
         touchSamples = 0; touchLatencySumNs = 0; maxTouchLatencyNs = 0
-        return line
+        dropped = 0; decodeSamples = 0; decodeSumNs = 0; maxDecodeNs = 0; maxQueueWaitNs = 0
+        return full
     }
 
     private companion object {

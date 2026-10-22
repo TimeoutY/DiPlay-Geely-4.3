@@ -29,16 +29,21 @@ internal class VideoDecodeQueue(
     private val maxBytes: Int = 8 * 1024 * 1024,
 ) {
     private val jobs = LinkedBlockingQueue<VideoJob>()
+    // Running totals of queued frames: the old per-offer filterIsInstance/sumOf allocated a list
+    // for every frame and walked the queue, adding GC_FOR_ALLOC pauses on 4.4's tiny heaps.
+    private var frameCount = 0
+    private var frameBytes = 0L
 
     @Synchronized fun offer(job: VideoJob) {
         if (job is VideoJob.Frame) {
-            val frames = jobs.filterIsInstance<VideoJob.Frame>()
-            if (frames.size >= maxFrames || frames.sumOf { it.nalus.size.toLong() } + job.nalus.size > maxBytes) {
+            if (frameCount >= maxFrames || frameBytes + job.nalus.size > maxBytes) {
                 discardFrames()
                 jobs.offer(VideoJob.Resync)
             }
             // A single oversized frame is also a lost reference chain.
             if (job.nalus.size > maxBytes) return
+            frameCount++
+            frameBytes += job.nalus.size
         }
         jobs.offer(job)
     }
@@ -52,9 +57,23 @@ internal class VideoDecodeQueue(
                 else -> Unit
             }
         }
+        frameCount = 0
+        frameBytes = 0L
     }
 
-    fun poll(timeoutMillis: Long): VideoJob? = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS)
+    fun poll(timeoutMillis: Long): VideoJob? {
+        val job = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS)
+        if (job is VideoJob.Frame) onTaken(job)
+        return job
+    }
+
+    @Synchronized private fun onTaken(job: VideoJob.Frame) {
+        if (frameCount > 0) frameCount--
+        frameBytes = (frameBytes - job.nalus.size).coerceAtLeast(0L)
+    }
+
+    /** Frames waiting for the decoder (diagnostic). */
+    @Synchronized fun queuedFrames(): Int = frameCount
 }
 
 /** Drain output while waiting for input: full output buffers can otherwise starve input forever. */
