@@ -48,9 +48,10 @@ class HotspotInterfaceBssidTest {
         assertNull(HotspotInterfaceBssid.read("does-not-exist"))
     }
 
-    // Example locally administered unicast address encoded in an IPv6 link-local address.
-    @Test fun decodesAnIpv6LinkLocalInterfaceAddress() {
-        assertEquals("02:4D:90:CB:AD:5C", HotspotInterfaceBssid.decode(bytes("fe80::4d:90ff:feCB:ad5c")))
+    // Captured from a HiBy R4 (Android 12, P2P MAC randomization) hosting the group: p2p0
+    // reported link/ether 4a:4d:90:cb:ad:5c, and a phone's scan listed the group at that BSSID.
+    @Test fun decodesAddressCapturedFromARandomizedP2pGroup() {
+        assertEquals("4A:4D:90:CB:AD:5C", HotspotInterfaceBssid.decode(bytes("fe80::484d:90ff:fecb:ad5c")))
     }
 
     @Test fun describesWhyNothingWasRecovered() {

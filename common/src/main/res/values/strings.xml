@@ -60,6 +60,7 @@
     <string name="status_attaching_ncm">Attaching NCM/AirPlay network</string>
     <string name="status_failed">Failed: %1$s</string>
     <string name="msg_car_hotspot_off">The car hotspot “%1$s” is off. Turn it on in the car settings before connecting.</string>
+    <string name="msg_car_hotspot_off_unnamed">The car hotspot is off. Tap Start hotspot or turn it on in the car settings, then connect.</string>
     <string name="home_public_preview">PUBLIC PREVIEW  ·\u0020\u0020</string>
     <string name="choose_iphone_prefix">Choose iPhone ·\u0020</string>
     <string name="audio_saved_value">Saved: %1$d</string>
@@ -483,7 +484,9 @@
     <string name="geely_audio_generic">Generic / custom channels</string>
     <string name="geely_audio_speech">CarPlay media + navigation speech</string>
     <string name="geely_audio_alert">Media 23 + speech 11; alert sounds 25</string>
-    <string name="geely_audio_unavailable">H52 audio extensions not detected. Use generic routing.</string>
+    <string name="geely_audio_unavailable">The Geely H52 audio channels are not available on this unit (no H52 audio interface found). This option is disabled; the generic channel is used.</string>
+    <string name="geely_audio_unavailable_short">\u0020(not available on this unit)</string>
+    <string name="geely_audio_stale">The saved H52 audio channel setting does not apply to this unit; it is ignored and normal audio focus is used.</string>
     <string name="geely_audio_detected">H52 extensions detected: CarPlay 23, navigation speech 11.</string>
     <string name="geely_audio_hint">H52 routing overrides custom media/navigation channels and uses independent audio focus. Speech stays on 11; optional alert sounds use 25. The vendor alert constant needs vehicle testing. Reconnect after changes. Actual sound and mixing require a vehicle test.</string>
     <string name="geely_audio_preview">Test H52 audio channels</string>
@@ -541,4 +544,53 @@
     <string name="legacy_report_failed">The user-storage root is unavailable or not writable. Check storage and retry.</string>
     <string name="legacy_report_retry">Retry</string>
     <string name="geely_bt_connection_status_note">The H52 factory connection route is selected. Choose an iPhone already paired in the factory interface, then try connecting. These status readings do not prove that wireless CarPlay is connected.</string>
+    <!-- Home 「启动热点」 button -->
+    <string name="home_hotspot_start">Start hotspot</string>
+    <string name="home_hotspot_starting">Starting hotspot…</string>
+    <string name="home_hotspot_stopping">Stopping hotspot…</string>
+    <string name="home_hotspot_on">Hotspot on · tap to stop</string>
+    <string name="home_hotspot_on_ssid">Hotspot on · %1$s</string>
+    <string name="home_hotspot_stop">Stop hotspot</string>
+    <string name="home_hotspot_open_settings">Hotspot settings</string>
+    <string name="home_hotspot_stop_title">Stop the car hotspot?</string>
+    <string name="home_hotspot_stop_message">The car’s Wi-Fi hotspot will be turned off. Wireless CarPlay in car-hotspot mode can’t connect until it is started again.</string>
+    <string name="home_hotspot_stop_message_session">The car’s Wi-Fi hotspot will be turned off and the current wireless CarPlay connection will drop.</string>
+    <string name="home_hotspot_switch_title">Switch to the car hotspot?</string>
+    <string name="home_hotspot_switch_message">The current wireless link (Wi-Fi Direct / local hotspot) creates its own network automatically when you tap Connect phone, so it doesn’t need a separate hotspot. Starting the car’s own hotspot switches DiPlay to car-hotspot mode for future connections, and may turn off the car’s Wi-Fi client connection. Continue?</string>
+    <string name="home_hotspot_switch_confirm">Switch and start</string>
+    <string name="home_hotspot_started_toast">Car hotspot is on: %1$s</string>
+    <string name="home_hotspot_stopped_toast">Car hotspot is off</string>
+    <string name="home_hotspot_failed_toast">Hotspot failed: %1$s</string>
+    <!-- In-app log viewer -->
+    <string name="log_open_button">Logs</string>
+    <string name="log_title">Logs</string>
+    <string name="log_refresh">Refresh</string>
+    <string name="log_clear">Clear</string>
+    <string name="log_save">Save to file</string>
+    <string name="log_filter_audio_off">Audio only: off</string>
+    <string name="log_filter_audio_on">Audio only: on</string>
+    <string name="log_empty">No log lines yet. Play music in CarPlay, then come back here.</string>
+    <string name="log_status">Showing %1$d of %2$d lines (buffer %3$d) · %4$s · auto-refresh 2 s</string>
+    <string name="log_reader_ok">capturing</string>
+    <string name="log_reader_failed">logcat unreadable (%1$s), app events only</string>
+    <string name="log_saved_to">Saved: %1$s</string>
+    <string name="log_saved_private">Storage is not writable; the log was saved to app-private storage (read it with adb run-as): %1$s</string>
+    <string name="log_save_failed">Could not save the log: %1$s</string>
+    <string name="log_unknown">?</string>
+    <string name="log_sum_focus">Focus: granted=%1$s · last change=%2$s</string>
+    <string name="log_sum_play">play(): playState=%1$s (3=playing) · volume=%2$s · muted=%3$s · mode=%4$s</string>
+    <string name="log_pcm_flowing">PCM: flowing · written=%1$d frames · head +%2$d frames per window</string>
+    <string name="log_pcm_stalled">PCM: STALLED · written=%1$d frames · head +%2$d frames per window</string>
+    <string name="log_pcm_none">PCM: no music stats yet</string>
+    <string name="log_sum_iphone">iPhone playing=%1$s · BT music: %2$s</string>
+    <!-- Boot hotspot -->
+    <string name="boot_hotspot_title">Turn on hotspot at startup</string>
+    <string name="boot_hotspot_description">After the head unit starts (and when DiPlay opens), turn on the car\'s own Wi-Fi hotspot so the iPhone can join. Retries for about a minute and switches DiPlay to car-hotspot mode once it is on. DiPlay must have been opened once after installing.</string>
+    <!-- Audio focus redesign -->
+    <string name="session_focus_title">Take audio focus when CarPlay connects</string>
+    <string name="session_focus_description">Android 4.x: take music focus once when the iPhone connects and keep it for the whole session, so the car\'s Bluetooth music app gives way before any song starts. Off: take it when music starts.</string>
+    <string name="anti_autopause_title">Prevent music auto-pause</string>
+    <string name="anti_autopause_description">Ignore play/pause keys for 2.5 s after music starts or focus is taken, and if the car pauses the iPhone within 6 s of taking focus without a key press, resume once.</string>
+    <string name="drop_bt_music_title">Disconnect Bluetooth music during CarPlay</string>
+    <string name="drop_bt_music_description">When wireless CarPlay connects, disconnect only the iPhone\'s Bluetooth music (A2DP) link so the car\'s Bluetooth music app cannot pause CarPlay. Calls (HFP) stay connected.</string>
 </resources>

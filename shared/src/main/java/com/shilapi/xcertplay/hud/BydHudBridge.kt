@@ -71,6 +71,7 @@ internal object BydHudBridge {
     }
 
     fun initialize(appContext: Context) = synchronized(lock) {
+        if (!com.shilapi.xcertplay.media.LegacyOpus.hudSupported(appContext)) return@synchronized
         if (context == null) context = appContext.applicationContext
         bindLocked()
         if (!senderStarted) {

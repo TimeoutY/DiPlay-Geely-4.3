@@ -387,6 +387,39 @@ object AirPlayPersistence {
             .apply()
     }
 
+    /** API < 21: take STREAM_MUSIC focus once when the CarPlay session connects and hold it. */
+    fun loadSessionAudioFocus(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("session_audio_focus", true)
+
+    fun saveSessionAudioFocus(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("session_audio_focus", enabled).apply()
+    }
+
+    /** 2.5 s play/pause key guard + one-shot PLAY after a head-unit AVRCP pause. */
+    fun loadAntiAutoPause(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("anti_auto_pause", true)
+
+    fun saveAntiAutoPause(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("anti_auto_pause", enabled).apply()
+    }
+
+    /** Disconnect the iPhone's A2DP (car Bluetooth music) once wireless CarPlay is up. */
+    fun loadDropBluetoothMusic(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("drop_bt_music", true)
+
+    fun saveDropBluetoothMusic(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("drop_bt_music", enabled).apply()
+    }
+
+    /** Turn the car's own hotspot on after boot / app start. Default on (user request). */
+    fun loadBootHotspotEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("boot_hotspot_enabled", true)
+
+    fun saveBootHotspotEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean("boot_hotspot_enabled", enabled).apply()
+    }
+
     fun loadAutoStartOnBoot(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_AUTO_START_ON_BOOT, false)

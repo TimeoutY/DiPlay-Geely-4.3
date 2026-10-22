@@ -61,6 +61,7 @@ internal class AudioFocusCoordinator(
     private var currentLegacyStreamType = AudioManager.STREAM_MUSIC
     private val legacyOnlyTracks = LinkedHashMap<AudioTrack, Pair<AudioChannel, Int>>()
     private var legacyOnlyFocusHeld = false
+    private var legacyOnlyFocusStream: Int? = null
     private var legacyRequestHeld = false
     private var requestedChannel: AudioChannel? = null
     private val geelyTracks = LinkedHashMap<AudioTrack, GeelyFocusKey>()
@@ -72,10 +73,25 @@ internal class AudioFocusCoordinator(
             when (change) {
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> setVolume(DUCKED_VOLUME)
                 AudioManager.AUDIOFOCUS_GAIN -> setVolume(FULL_VOLUME)
+                // A permanent loss drops our stack entry; let the next track start request again.
+                AudioManager.AUDIOFOCUS_LOSS -> { legacyOnlyFocusHeld = false }
                 // Keep CarPlay audio running on permanent or transient loss. Some head units
                 // do not send a later gain callback after taking focus back.
             }
         }
+    }
+
+    /** Volume/mode facts for logcat: a silent head unit shows here as volume 0, wrong mode, or no focus. */
+    fun streamSnapshot(streamType: Int): String {
+        val audio = manager ?: return "audioManager=null"
+        val volume = runCatching { audio.getStreamVolume(streamType) }.getOrNull()
+        val max = runCatching { audio.getStreamMaxVolume(streamType) }.getOrNull()
+        // AudioManager.isStreamMute is hidden before API 23.
+        val muted = runCatching {
+            AudioManager::class.java.getMethod("isStreamMute", Integer.TYPE).invoke(audio, streamType) as? Boolean
+        }.getOrNull()
+        return "stream=$streamType volume=$volume/$max muted=$muted mode=${runCatching { audio.mode }.getOrNull()} " +
+            "musicActive=${runCatching { audio.isMusicActive }.getOrNull()} sinkFocus=${if (enabled) "on" else "off"}"
     }
 
     @Synchronized
@@ -107,16 +123,47 @@ internal class AudioFocusCoordinator(
     fun release(track: AudioTrack) {
         val geelyKey = geelyTracks.remove(track)
         if (geelyKey != null && geelyTracks.values.none { it == geelyKey }) {
-            geelyVolumes.remove(geelyKey)
-            geelyListeners.remove(geelyKey)?.let { lease ->
-                runCatching { manager?.abandonAudioFocus(lease.listener) }
+            if (geelyKey.channel == AudioChannel.MEDIA && geelyListeners.containsKey(geelyKey)) {
+                // H52: abandoning CarPlay media focus between songs hands focus back to GKUI's own
+                // media app, which then AVRCP-pauses the iPhone. Keep it until the session ends.
                 runCatching {
-                    report("Audio: Geely focus released channel=${geelyKey.channel} stream=${geelyKey.streamType}")
+                    report("Audio: Geely media focus kept after last track (released at session end)")
                 }
+            } else {
+                abandonGeely(geelyKey)
             }
         }
         if (legacyOnlyTracks.remove(track) != null) refreshLegacyFocus()
         if (active.remove(track) != null) refreshRequest()
+    }
+
+    private fun abandonGeely(key: GeelyFocusKey) {
+        geelyVolumes.remove(key)
+        geelyListeners.remove(key)?.let { lease ->
+            @Suppress("DEPRECATION")
+            runCatching { manager?.abandonAudioFocus(lease.listener) }
+            runCatching {
+                report("Audio: Geely focus released channel=${key.channel} stream=${key.streamType}")
+            }
+        }
+    }
+
+    /** Session end (or sink close): drop Geely focus leases no track is using any more. */
+    @Synchronized
+    fun releaseIdleSessionFocus() {
+        geelyListeners.keys.filter { key -> geelyTracks.values.none { it == key } }.forEach(::abandonGeely)
+    }
+
+    private val sessionEndHook: () -> Unit = { releaseIdleSessionFocus() }
+
+    init {
+        if (separateGeelyFocus) AudioSessionFocus.addSessionEndHook(sessionEndHook)
+    }
+
+    @Synchronized
+    fun dispose() {
+        AudioSessionFocus.removeSessionEndHook(sessionEndHook)
+        releaseIdleSessionFocus()
     }
 
     @Suppress("DEPRECATION")
@@ -213,11 +260,35 @@ internal class AudioFocusCoordinator(
         if (primary == null) {
             if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
             legacyOnlyFocusHeld = false
+            legacyOnlyFocusStream = null
             return
         }
-        if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
         currentLegacyStreamType = primary.second
+        if (primary.first == AudioChannel.MEDIA && primary.second == AudioManager.STREAM_MUSIC &&
+            AudioSessionFocus.sessionOwnsMusicFocus
+        ) {
+            // CarPlayMediaKeys already holds session-level MUSIC focus. A second client from this
+            // app would take focus from it (AOSP 4.4 sends LOSS to the previous holder) and ping-pong.
+            if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
+            legacyOnlyFocusHeld = false
+            legacyOnlyFocusStream = null
+            val line = "Audio: legacy focus delegated to session focus channel=${primary.first} " +
+                "stream=${primary.second} activeTracks=${legacyOnlyTracks.size}"
+            Log.i(TAG, line)
+            runCatching { report(line) }
+            return
+        }
+        // Keep the held request when the primary stream is unchanged. Abandoning and re-requesting
+        // on every track start/stop briefly hands focus back to the head unit's own media app,
+        // which may resume and then pause (and pause the iPhone over AVRCP) again.
+        if (legacyOnlyFocusHeld && legacyOnlyFocusStream == primary.second) return
+        if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
         legacyOnlyFocusHeld = requestAudioFocusLegacy(primary.second) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        legacyOnlyFocusStream = if (legacyOnlyFocusHeld) primary.second else null
+        val line = "Audio: legacy focus requested channel=${primary.first} stream=${primary.second} " +
+            "granted=$legacyOnlyFocusHeld activeTracks=${legacyOnlyTracks.size}"
+        Log.i(TAG, line)
+        runCatching { report(line) }
     }
 
     private fun abandonFocus() {
@@ -549,6 +620,7 @@ class AndroidMediaSink(
         recoveryExecutor.shutdownNow()
         audioRenderers.values.forEach(AudioRenderer::close)
         audioRenderers.clear()
+        audioFocusCoordinator.dispose()
         val hadMedia = synchronized(mediaAudioTypes) { mediaAudioTypes.isNotEmpty().also { mediaAudioTypes.clear() } }
         if (hadMedia) onMediaAudioChanged(false)
         try {
@@ -638,6 +710,7 @@ private class VideoDecoder(
     }
 
     private fun run() {
+        com.shilapi.xcertplay.compat.H52NoRootBridge.boostThreadPriority()
         try {
             while (running) {
                 val job = queue.poll(5)
@@ -860,8 +933,8 @@ private class VideoDecoder(
         Log.w(TAG, "Video recovery: $reason; waiting for keyframe")
         stats.onRecovery()
         report("recovery: $reason; waiting for keyframe")
-        // Recreate with codec-specific data: flush can discard CSD before the first output.
-        releaseDecoder()
+        // Use non-destructive flush instead of destroying OMX decoder instance
+        com.shilapi.xcertplay.compat.H52MediaCodecOptimizer.flushDecoder(decoder)
         referenceChain.reset()
         requestKeyFrameIfDue()
     }
@@ -1051,10 +1124,13 @@ private class AudioRenderer(
     }
 
     private fun run() {
+        // Standard Android audio-thread priority. Video threads run at URGENT_DISPLAY (P16), so
+        // keep PCM delivery from starving behind them on a single busy API 18/19 CPU.
+        runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO) }
         try {
             when (format.codec) {
                 AudioCodecKind.AAC_LC -> configureCodec(MediaFormat.MIMETYPE_AUDIO_AAC)
-                AudioCodecKind.OPUS -> configureCodec(MediaFormat.MIMETYPE_AUDIO_OPUS)
+                AudioCodecKind.OPUS -> if (android.os.Build.VERSION.SDK_INT >= 21) configureCodec(MediaFormat.MIMETYPE_AUDIO_OPUS)
                 AudioCodecKind.LPCM -> Unit
             }
             createTrack()
@@ -1352,6 +1428,11 @@ private class AudioRenderer(
             }
             AudioCodecKind.OPUS -> {
                 val accessUnit = rtp.copyOfRange(12, rtp.size)
+                if (android.os.Build.VERSION.SDK_INT < 21) {
+                    val pcm = LegacyOpus.decode(this, accessUnit, format.sampleRate, format.channels)
+                    writePcm(pcm, 0, pcm.size)
+                    return
+                }
                 if (accessUnit.size < MIN_OPUS_PACKET_BYTES) {
                     if (!firstOpusShortPacketLogged) {
                         firstOpusShortPacketLogged = true
@@ -1500,6 +1581,11 @@ private class AudioRenderer(
         underrunsAtPlaybackStart = PortableAudio.underrunCount(track)
         track.play()
         playbackStarted = true
+        val line = "audio play() audioType=${format.audioType} channel=$mappedChannel " +
+            "trackStream=$legacyTrackStreamType trackState=${track.state} playState=${track.playState} " +
+            audioFocusCoordinator.streamSnapshot(legacyTrackStreamType)
+        Log.i(STATS_TAG, line)
+        runCatching { report(line) }
     }
 
     private fun maintainPlaybackBuffer() {
@@ -1586,6 +1672,7 @@ private class AudioRenderer(
 
     @Synchronized
     private fun release() {
+        LegacyOpus.release(this)
         abandonAudioFocus()
         val codec = codec
         this.codec = null

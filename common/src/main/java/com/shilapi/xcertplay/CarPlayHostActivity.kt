@@ -469,6 +469,7 @@ class CarPlayHostActivity : ComponentActivity() {
             AirPlayPersistence.saveWirelessEnabled(this, false)
             intent.removeExtra(EXTRA_TRANSPORT_WIRELESS)
         }
+        com.shilapi.xcertplay.logs.DiPlayLog.start(this)
         if (runCatching { DiPlayBootstrap.ensure(this) }.isFailure) {
             startActivity(Intent(this, DiPlayActivity::class.java))
             finish(); return

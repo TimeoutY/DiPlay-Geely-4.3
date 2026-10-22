@@ -28,6 +28,7 @@
     <string name="hotspot_tools_firmware_failed">The car reported a hotspot start failure.</string>
     <string name="hotspot_tools_request_rejected">The car rejected the hotspot start request.</string>
     <string name="hotspot_tools_start_timeout">The car did not report an enabled hotspot before the timeout. Check its state before trying again.</string>
+    <string name="hotspot_tools_start_timeout_sta_on">The car does not start its hotspot while station Wi-Fi is on. Turning Wi-Fi off automatically did not help; switch Wi-Fi off in the car settings and try again.</string>
     <string name="hotspot_tools_operation_cancelled">The operation was canceled before a start request could be confirmed.</string>
     <string name="hotspot_tools_operation_failed">The hotspot operation failed. Nothing was changed unless the car accepted a start request; check its state before retrying.</string>
     <string name="hotspot_tools_p2p_legacy">Android 4.3 Wi-Fi Direct: the system generates the network name and password and selects the band. Requires firmware support; 5 GHz cannot be forced. If creation fails, use the built-in car hotspot.</string>

@@ -4,6 +4,7 @@ import android.hardware.usb.*;
 import android.util.Log;
 import java.util.*;
 import com.shilapi.xcertplay.compat.LegacyUsbNative;
+import com.shilapi.xcertplay.compat.H52NoRootBridge;
 
 /** API18 flattens every configuration into UsbDevice.interfaces, in descriptor order. */
 public final class H52UsbConfigurationFix {
@@ -67,16 +68,22 @@ public final class H52UsbConfigurationFix {
                     selected=new java.io.File(path,"bConfigurationValue");
                 }
                 if(selected==null) throw new IllegalStateException("Apple USB sysfs path unavailable");
-                Process process=new ProcessBuilder("su","-c","echo "+target+" > "+selected.getPath()).redirectErrorStream(true).start();
-                long deadline=System.nanoTime()+5000000000L;
-                int exit=-1;
-                while(System.nanoTime()<deadline) {
-                    try { exit=process.exitValue(); break; } catch(IllegalThreadStateException pending) { Thread.sleep(25); }
+                boolean switched = H52NoRootBridge.switchUsbConfiguration(target, selected.getPath());
+                String via = "no-root bridge";
+                if (!switched) {
+                    // Head units without the H52 usbprotect service: keep the P12 root helper.
+                    Process process=new ProcessBuilder("su","-c","echo "+target+" > "+selected.getPath()).redirectErrorStream(true).start();
+                    long deadline=System.nanoTime()+5000000000L;
+                    int exit=-1;
+                    while(System.nanoTime()<deadline) {
+                        try { exit=process.exitValue(); break; } catch(IllegalThreadStateException pending) { Thread.sleep(25); }
+                    }
+                    process.destroy();
+                    if(exit!=0) throw new IllegalStateException("H52 USB configuration no-root and root helpers failed: "+exit);
+                    via = "su fallback";
                 }
-                process.destroy();
-                if(exit!=0) throw new IllegalStateException("H52 USB configuration root helper failed: "+exit);
                 result=0;
-                Log.i("xcertplay-usb","H52 Apple-only sysfs configuration transition target="+target+" completed");
+                Log.i("xcertplay-usb","H52 Apple-only sysfs configuration transition target="+target+" completed via "+via);
             } catch(Exception e) { throw new IllegalStateException("H52 USB configuration transition unavailable",e); }
         }
         Arrays.fill(current,(byte)0);
