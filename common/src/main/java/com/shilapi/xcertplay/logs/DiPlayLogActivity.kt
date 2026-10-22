@@ -28,6 +28,9 @@ class DiPlayLogActivity : Activity() {
     private var shownVersion = -1L
     private var shownFilter: Boolean? = null
     private var savedPath: String? = null
+    private var shownText: String? = null
+    private var renderInFlight = false
+    private var renderRequest = 0
     private val refresher = object : Runnable {
         override fun run() {
             refresh(force = false)
@@ -104,25 +107,62 @@ class DiPlayLogActivity : Activity() {
         filterButton.setTextColor(if (audioOnly) BG else TEXT)
     }
 
+    private class Rendered(
+        val version: Long, val audioOnly: Boolean, val text: String, val summary: AudioLogSummary,
+        val visible: Int, val filtered: Int, val total: Int,
+    )
+
+    /**
+     * Snapshot, filter, regex compaction and summary parsing run on [worker]; only setText runs on
+     * the UI thread. Doing all of it on the UI thread every 2 s while logcat was busy caused an ANR
+     * under monkey on a slow unit.
+     */
     private fun refresh(force: Boolean, scrollToEnd: Boolean = false) {
         val version = DiPlayLog.version
         if (!force && version == shownVersion && shownFilter == audioOnly) return
-        val all = DiPlayLog.snapshot()
-        val filtered = if (audioOnly) all.filter(::isAudioLine) else all
-        val visible = filtered.takeLast(MAX_VISIBLE_LINES)
-        // Follow the tail only when the driver has not scrolled up to read.
         val child = scroll.getChildAt(0)
         val atBottom = child == null || scroll.scrollY + scroll.height >= child.height - dp(48)
-        logView.text = if (visible.isEmpty()) getString(R.string.log_empty) else visible.joinToString("\n") { compact(it) }
-        summaryView.text = summaryText(AudioLogSummary.from(all))
+        // The driver scrolled up to read: don't re-layout the big text under them on auto-refresh.
+        if (!force && !atBottom) return
+        if (!force && renderInFlight) return
+        renderInFlight = true
+        val filter = audioOnly
+        val request = ++renderRequest
+        worker.execute {
+            val rendered = runCatching { render(version, filter) }.getOrNull()
+            handler.post {
+                if (request == renderRequest) renderInFlight = false
+                if (rendered == null || isFinishing || request != renderRequest) return@post
+                apply(rendered, scrollToEnd)
+            }
+        }
+    }
+
+    private fun render(version: Long, filter: Boolean): Rendered {
+        val all = DiPlayLog.snapshot()
+        val filtered = if (filter) all.filter(::isAudioLine) else all
+        val visible = filtered.takeLast(MAX_VISIBLE_LINES)
+        val text = visible.joinToString("\n") { compact(it) }
+        return Rendered(version, filter, text, AudioLogSummary.from(all), visible.size, filtered.size, all.size)
+    }
+
+    private fun apply(r: Rendered, scrollToEnd: Boolean) {
+        val child = scroll.getChildAt(0)
+        val atBottom = child == null || scroll.scrollY + scroll.height >= child.height - dp(48)
+        val text = if (r.visible == 0) getString(R.string.log_empty) else r.text
+        if (text != shownText) {
+            logView.text = text
+            shownText = text
+        }
+        summaryView.text = summaryText(r.summary)
         statusView.text = getString(
             R.string.log_status,
-            visible.size, filtered.size, all.size,
+            r.visible, r.filtered, r.total,
             if (DiPlayLog.readerWorking) getString(R.string.log_reader_ok)
             else getString(R.string.log_reader_failed, DiPlayLog.readerError ?: "?"),
         ) + (savedPath?.let { "  ·  " + getString(R.string.log_saved_to, it) } ?: "")
-        shownVersion = version
-        shownFilter = audioOnly
+        shownVersion = r.version
+        shownFilter = r.audioOnly
         if (atBottom || scrollToEnd) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
     }
 
@@ -154,9 +194,11 @@ class DiPlayLogActivity : Activity() {
             runOnUiThread {
                 result.onSuccess { file ->
                     savedPath = file.absolutePath
-                    Toast.makeText(this, getString(R.string.log_saved_to, file.absolutePath), Toast.LENGTH_LONG).show()
+                    val isPrivate = file.absolutePath.startsWith(applicationContext.filesDir.absolutePath)
+                    val message = if (isPrivate) R.string.log_saved_private else R.string.log_saved_to
+                    Toast.makeText(applicationContext, getString(message, file.absolutePath), Toast.LENGTH_LONG).show()
                 }.onFailure { error ->
-                    Toast.makeText(this, getString(R.string.log_save_failed, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
+                    Toast.makeText(applicationContext, getString(R.string.log_save_failed, error.message ?: error.javaClass.simpleName), Toast.LENGTH_LONG).show()
                 }
                 refresh(force = true)
             }
@@ -176,7 +218,11 @@ class DiPlayLogActivity : Activity() {
 
     companion object {
         private const val REFRESH_MS = 2_000L
-        private const val MAX_VISIBLE_LINES = 400
+        private const val MAX_VISIBLE_LINES = 200
+        /** One shared low-priority render thread; at most one render queued per refresh. */
+        private val worker = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+            Thread(task, "diplay-log-render").apply { isDaemon = true; priority = Thread.MIN_PRIORITY + 1 }
+        }
         private val LINE = Regex("""^\d\d-\d\d (\d\d:\d\d:\d\d\.\d+) ([VDIWEF])/([^(]+)\(\s*\d+\): ?(.*)$""")
         private val AUDIO_TAGS = listOf(
             "DiPlay-AudioFocus", "DiPlay-AudioStats", "DiPlay-MediaKeys", "DiPlay-BtAudio",

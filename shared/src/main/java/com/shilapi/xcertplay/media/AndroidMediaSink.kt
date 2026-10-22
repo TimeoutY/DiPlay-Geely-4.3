@@ -123,16 +123,47 @@ internal class AudioFocusCoordinator(
     fun release(track: AudioTrack) {
         val geelyKey = geelyTracks.remove(track)
         if (geelyKey != null && geelyTracks.values.none { it == geelyKey }) {
-            geelyVolumes.remove(geelyKey)
-            geelyListeners.remove(geelyKey)?.let { lease ->
-                runCatching { manager?.abandonAudioFocus(lease.listener) }
+            if (geelyKey.channel == AudioChannel.MEDIA && geelyListeners.containsKey(geelyKey)) {
+                // H52: abandoning CarPlay media focus between songs hands focus back to GKUI's own
+                // media app, which then AVRCP-pauses the iPhone. Keep it until the session ends.
                 runCatching {
-                    report("Audio: Geely focus released channel=${geelyKey.channel} stream=${geelyKey.streamType}")
+                    report("Audio: Geely media focus kept after last track (released at session end)")
                 }
+            } else {
+                abandonGeely(geelyKey)
             }
         }
         if (legacyOnlyTracks.remove(track) != null) refreshLegacyFocus()
         if (active.remove(track) != null) refreshRequest()
+    }
+
+    private fun abandonGeely(key: GeelyFocusKey) {
+        geelyVolumes.remove(key)
+        geelyListeners.remove(key)?.let { lease ->
+            @Suppress("DEPRECATION")
+            runCatching { manager?.abandonAudioFocus(lease.listener) }
+            runCatching {
+                report("Audio: Geely focus released channel=${key.channel} stream=${key.streamType}")
+            }
+        }
+    }
+
+    /** Session end (or sink close): drop Geely focus leases no track is using any more. */
+    @Synchronized
+    fun releaseIdleSessionFocus() {
+        geelyListeners.keys.filter { key -> geelyTracks.values.none { it == key } }.forEach(::abandonGeely)
+    }
+
+    private val sessionEndHook: () -> Unit = { releaseIdleSessionFocus() }
+
+    init {
+        if (separateGeelyFocus) AudioSessionFocus.addSessionEndHook(sessionEndHook)
+    }
+
+    @Synchronized
+    fun dispose() {
+        AudioSessionFocus.removeSessionEndHook(sessionEndHook)
+        releaseIdleSessionFocus()
     }
 
     @Suppress("DEPRECATION")
@@ -233,6 +264,20 @@ internal class AudioFocusCoordinator(
             return
         }
         currentLegacyStreamType = primary.second
+        if (primary.first == AudioChannel.MEDIA && primary.second == AudioManager.STREAM_MUSIC &&
+            AudioSessionFocus.sessionOwnsMusicFocus
+        ) {
+            // CarPlayMediaKeys already holds session-level MUSIC focus. A second client from this
+            // app would take focus from it (AOSP 4.4 sends LOSS to the previous holder) and ping-pong.
+            if (legacyOnlyFocusHeld) runCatching { manager?.abandonAudioFocus(listener) }
+            legacyOnlyFocusHeld = false
+            legacyOnlyFocusStream = null
+            val line = "Audio: legacy focus delegated to session focus channel=${primary.first} " +
+                "stream=${primary.second} activeTracks=${legacyOnlyTracks.size}"
+            Log.i(TAG, line)
+            runCatching { report(line) }
+            return
+        }
         // Keep the held request when the primary stream is unchanged. Abandoning and re-requesting
         // on every track start/stop briefly hands focus back to the head unit's own media app,
         // which may resume and then pause (and pause the iPhone over AVRCP) again.
@@ -575,6 +620,7 @@ class AndroidMediaSink(
         recoveryExecutor.shutdownNow()
         audioRenderers.values.forEach(AudioRenderer::close)
         audioRenderers.clear()
+        audioFocusCoordinator.dispose()
         val hadMedia = synchronized(mediaAudioTypes) { mediaAudioTypes.isNotEmpty().also { mediaAudioTypes.clear() } }
         if (hadMedia) onMediaAudioChanged(false)
         try {

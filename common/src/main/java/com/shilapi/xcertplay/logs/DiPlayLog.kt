@@ -33,6 +33,12 @@ object DiPlayLog {
     @Volatile var readerError: String? = null
         private set
     private var readerProcess: java.lang.Process? = null
+    /** Lines stored directly while logcat was not (yet) readable; logcat replays them on start. */
+    private var directLines = 0
+    private const val MAX_LINE_CHARS = 1_200
+    /** "MM-dd HH:mm:ss.SSS" from `logcat -v time`; sorts lexically within a year. */
+    private const val TIME_PREFIX = 18
+    @Volatile private var lastStamp: String? = null
 
     /** Starts the background logcat follower once per process. Safe to call from any component. */
     @Synchronized
@@ -41,6 +47,7 @@ object DiPlayLog {
         started = true
         val pid = Process.myPid()
         Thread({ follow(pid) }, "diplay-logcat").apply { isDaemon = true; priority = Thread.MIN_PRIORITY }.start()
+        com.shilapi.xcertplay.network.CarHotspotTools.logger = { note("DiPlay-Hotspot", it) }
         note(TAG, "log capture started pid=$pid package=${context.packageName}")
     }
 
@@ -55,7 +62,20 @@ object DiPlayLog {
                     while (true) {
                         val line = reader.readLine() ?: break
                         if (line.isBlank() || line.startsWith("--------- beginning of")) continue
-                        readerWorking = true
+                        // A restarted logcat replays the whole history: skip what we already have.
+                        val stamp = line.take(TIME_PREFIX)
+                        if (attempt > 1 && lastStamp != null && stamp <= lastStamp!!) continue
+                        if (stamp.length == TIME_PREFIX && stamp[2] == '-') lastStamp = stamp
+                        if (!readerWorking) {
+                            // logcat replays this uid's history, including the lines we stored
+                            // directly before it was readable: drop those to avoid duplicates.
+                            synchronized(lines) {
+                                repeat(minOf(directLines, lines.size)) { lines.removeLast() }
+                                directLines = 0
+                                version++
+                            }
+                            readerWorking = true
+                        }
                         append(line)
                     }
                 }
@@ -80,13 +100,17 @@ object DiPlayLog {
 
     private fun appendDirect(tag: String, message: String, level: Char = 'I') {
         val time = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
-        append("$time $level/$tag(${Process.myPid()}): $message")
+        synchronized(lines) {
+            append("$time $level/$tag(${Process.myPid()}): $message")
+            directLines++
+        }
     }
 
     private fun append(line: String) {
+        val stored = if (line.length > MAX_LINE_CHARS) line.take(MAX_LINE_CHARS) + "…" else line
         synchronized(lines) {
             if (lines.size >= MAX_LINES) lines.removeFirst()
-            lines.addLast(line)
+            lines.addLast(stored)
             version++
         }
     }
@@ -94,7 +118,7 @@ object DiPlayLog {
     fun snapshot(): List<String> = synchronized(lines) { ArrayList(lines) }
 
     fun clear() {
-        synchronized(lines) { lines.clear(); version++ }
+        synchronized(lines) { lines.clear(); directLines = 0; version++ }
     }
 
     /**
@@ -103,9 +127,10 @@ object DiPlayLog {
      */
     fun save(context: Context): File {
         val name = "diplay-log-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())}.txt"
+        val lines = snapshot()
         val text = buildString {
-            appendLine("DiPlay log ${Date()} lines=${snapshot().size} readerWorking=$readerWorking readerError=${readerError ?: "none"}")
-            snapshot().forEach { appendLine(it) }
+            appendLine("DiPlay log ${Date()} lines=${lines.size} readerWorking=$readerWorking readerError=${readerError ?: "none"}")
+            lines.forEach { appendLine(it) }
         }
         val candidates = listOfNotNull(
             runCatching { File(Environment.getExternalStorageDirectory(), "DiPlay") }.getOrNull(),

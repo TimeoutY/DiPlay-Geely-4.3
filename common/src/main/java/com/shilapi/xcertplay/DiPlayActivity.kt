@@ -224,6 +224,13 @@ class DiPlayActivity : ComponentActivity() {
                 handler.post { connect(AirPlayPersistence.loadWirelessEnabled(this)) }
             }
         }
+        // A home start/stop whose result arrived while paused is dropped by submitCarHotspotAction;
+        // without this the button stayed on "正在启动热点…" and disabled until the activity died.
+        if (homeHotspotPending != null && !hotspotOperationBusy.get()) {
+            homeHotspotPending = null
+            homeHotspotSwitchToManual = false
+            updateHotspotButton()
+        }
         // Every mode reads it now: the home hotspot button shows the AP state regardless of link mode.
         submitCarHotspotAction(CarHotspotAction.READ_STATE)
     }
@@ -298,7 +305,8 @@ class DiPlayActivity : ComponentActivity() {
         }
         card.addView(label(connectionHint, 15, MUTED).apply { setPadding(0, dp(14), 0, 0) })
         if (carHotspotOff()) {
-            card.addView(label(getString(R.string.msg_car_hotspot_off, AirPlayPersistence.loadManualHotspotSsid(this)), 15, WARNING).apply { setPadding(0, dp(14), 0, 0) })
+            card.addView(label(AirPlayPersistence.loadManualHotspotSsid(this).takeIf { it.isNotBlank() }
+                ?.let { getString(R.string.msg_car_hotspot_off, it) } ?: getString(R.string.msg_car_hotspot_off_unnamed), 15, WARNING).apply { setPadding(0, dp(14), 0, 0) })
             card.addView(button(getString(R.string.open_car_hotspot_settings), false) { openCarWifiSettings() }, matchButton(10, 56))
         }
         card.addView(button(getString(R.string.choose_iphone), false) { choosePhone() }, matchButton(16, 56))
@@ -828,7 +836,7 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun onHomeHotspotClicked() {
         if (homeHotspotPending != null) return
-        if (hotspotOperationBusy.get()) {
+        if (hotspotOperationBusy.get() || BootHotspotService.isRunning) {
             toast(getString(R.string.hotspot_tools_busy))
             return
         }
@@ -973,6 +981,7 @@ class DiPlayActivity : ComponentActivity() {
         CarHotspotFailure.FIRMWARE_REPORTED_FAILURE -> R.string.hotspot_tools_firmware_failed
         CarHotspotFailure.REQUEST_REJECTED -> R.string.hotspot_tools_request_rejected
         CarHotspotFailure.START_TIMED_OUT -> R.string.hotspot_tools_start_timeout
+        CarHotspotFailure.START_TIMED_OUT_STA_ON -> R.string.hotspot_tools_start_timeout_sta_on
         CarHotspotFailure.OPERATION_CANCELLED -> R.string.hotspot_tools_operation_cancelled
         CarHotspotFailure.OPERATION_INTERRUPTED -> R.string.hotspot_tools_operation_cancelled
         CarHotspotFailure.OPERATION_FAILED -> R.string.hotspot_tools_operation_failed
@@ -1140,7 +1149,8 @@ class DiPlayActivity : ComponentActivity() {
         val alert = AirPlayPersistence.loadGeelyNavigationAlert(this)
         fun summary(): String = getString(R.string.geely_audio_profile) + " · " + getString(
             if (!selected || capabilities == null) R.string.geely_audio_generic
-            else if (alert) R.string.geely_audio_alert else R.string.geely_audio_speech)
+            else if (alert) R.string.geely_audio_alert else R.string.geely_audio_speech) +
+            if (capabilities == null) getString(R.string.geely_audio_unavailable_short) else ""
         val control = button(summary(), false) {}
         control.setOnClickListener {
             val labels = if (capabilities == null) {
@@ -1165,6 +1175,7 @@ class DiPlayActivity : ComponentActivity() {
         }
         parent.addView(control, matchButton(0, 60))
         parent.addView(label(getString(if (capabilities == null) R.string.geely_audio_unavailable else R.string.geely_audio_detected), 14, MUTED))
+        if (capabilities == null && selected) parent.addView(label(getString(R.string.geely_audio_stale), 14, MUTED))
         parent.addView(label(getString(R.string.geely_audio_hint), 14, MUTED))
         if (capabilities != null) parent.addView(button(getString(R.string.geely_audio_preview), false) {
             val routes = listOf(capabilities.carPlay, capabilities.navigationSpeech) + listOfNotNull(capabilities.navigationAlert)
@@ -2150,6 +2161,8 @@ class DiPlayActivity : ComponentActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     companion object {
         private val hotspotOperationBusy = AtomicBoolean(false)
+        /** Lets the boot/app-launch auto-start avoid racing a home-button start/stop. */
+        internal fun hotspotOperationInProgress(): Boolean = hotspotOperationBusy.get()
         private val hotspotToolsExecutor = Executors.newSingleThreadExecutor { task ->
             Thread(task, "diplay-car-hotspot-tools").apply { isDaemon = true }
         }

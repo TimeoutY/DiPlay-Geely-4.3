@@ -69,6 +69,8 @@ internal object CarPlayMediaKeys {
     private var sessionActive = false
     private var legacyFocusGrantedAt = 0L
     private var autoResumeArmed = false
+    /** Auto-resumes sent in this session; capped so a focus ping-pong with the car can't loop. */
+    private var autoResumeCount = 0
     private var lastHardwareKeyAt = 0L
     private var mediaAudioStartedAt = 0L
     private var legacyReceiver: BroadcastReceiver? = null
@@ -114,6 +116,7 @@ internal object CarPlayMediaKeys {
                 if (controller !== expected) return@synchronized
                 val context = appContext ?: return@synchronized
                 sessionActive = active
+                autoResumeCount = 0
                 DiPlayLog.note(FOCUS_TAG, "AirPlay session ${if (active) "active" else "ended"} wireless=$wireless " +
                     "sessionFocus=${AirPlayPersistence.loadSessionAudioFocus(context)} " +
                     "antiAutoPause=${AirPlayPersistence.loadAntiAutoPause(context)}")
@@ -283,10 +286,17 @@ internal object CarPlayMediaKeys {
 
     private fun requestLegacyFocusLocked(context: Context, reason: String) {
         // H52 track coordinator owns vendor focus; a second MUSIC focus mutes that route (upstream P21).
+        // Only when the routing is really active: a stale toggle on a unit without the H52 streams
+        // must not leave CarPlay without any focus (GKUI then routes nothing = silence).
         if (AirPlayPersistence.loadGeelyAudioRouting(context)) {
-            DiPlayLog.note(FOCUS_TAG, "legacy focus skipped ($reason): H52 Geely audio routing owns focus")
-            return
+            if (com.shilapi.xcertplay.media.GeelyAudioCapabilities.detect() != null) {
+                DiPlayLog.note(FOCUS_TAG, "legacy focus skipped ($reason): H52 Geely audio routing owns focus")
+                return
+            }
+            DiPlayLog.note(FOCUS_TAG, "H52 Geely audio routing is ON but this unit has no H52 audio streams; " +
+                "requesting normal focus ($reason)", warn = true)
         }
+        com.shilapi.xcertplay.media.AudioSessionFocus.sessionOwnsMusicFocus = true
         if (legacyFocusHeld) return
         val audio = context.systemService(AudioManager::class.java, "audio") ?: run {
             DiPlayLog.note(FOCUS_TAG, "legacy focus ($reason): AudioManager unavailable", warn = true)
@@ -315,6 +325,7 @@ internal object CarPlayMediaKeys {
         }
         legacyFocusHeld = false
         autoResumeArmed = false
+        com.shilapi.xcertplay.media.AudioSessionFocus.sessionOwnsMusicFocus = false
     }
 
     /**
@@ -337,6 +348,12 @@ internal object CarPlayMediaKeys {
             return
         }
         autoResumeArmed = false
+        if (autoResumeCount >= MAX_AUTO_RESUMES_PER_SESSION) {
+            DiPlayLog.note(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant; auto-resume limit " +
+                "($MAX_AUTO_RESUMES_PER_SESSION) reached this session, leaving it paused", warn = true)
+            return
+        }
+        autoResumeCount++
         DiPlayLog.note(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant with no key press " +
             "(head-unit AVRCP pause on focus loss); resuming once", warn = true)
         mainHandler.postDelayed({
@@ -445,6 +462,7 @@ internal object CarPlayMediaKeys {
     private const val FOCUS_TAG = "DiPlay-AudioFocus"
     private const val AUTO_RESUME_WINDOW_MS = 6_000L
     private const val AUTO_RESUME_DELAY_MS = 400L
+    private const val MAX_AUTO_RESUMES_PER_SESSION = 2
     private const val MAX_ARTWORK_DIMENSION = 384
     private const val MAX_ARTWORK_SOURCE_DIMENSION = 8_192
     private const val MAX_CACHED_ARTWORK = 4

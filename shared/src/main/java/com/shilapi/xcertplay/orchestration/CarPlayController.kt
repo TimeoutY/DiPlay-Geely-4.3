@@ -293,6 +293,7 @@ class CarPlayController(
                 try { airPlaySessionListener?.invoke(false, false) } catch (error: Exception) {
                     Log.w(IphoneCarPlayConfiguration.TAG, "session listener failed", error)
                 }
+                com.shilapi.xcertplay.media.AudioSessionFocus.onSessionEnded()
                 BydNavigationOutputs.endNow()
                 com.shilapi.xcertplay.glance.CarPlayGlance.setConnected(false)
                 videoListener?.onVideoSessionEnded()

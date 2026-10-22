@@ -60,6 +60,7 @@
     <string name="status_attaching_ncm">Attaching NCM/AirPlay network</string>
     <string name="status_failed">Failed: %1$s</string>
     <string name="msg_car_hotspot_off">The car hotspot “%1$s” is off. Turn it on in the car settings before connecting.</string>
+    <string name="msg_car_hotspot_off_unnamed">The car hotspot is off. Tap Start hotspot or turn it on in the car settings, then connect.</string>
     <string name="home_public_preview">PUBLIC PREVIEW  ·\u0020\u0020</string>
     <string name="choose_iphone_prefix">Choose iPhone ·\u0020</string>
     <string name="audio_saved_value">Saved: %1$d</string>
@@ -483,7 +484,9 @@
     <string name="geely_audio_generic">Generic / custom channels</string>
     <string name="geely_audio_speech">CarPlay media + navigation speech</string>
     <string name="geely_audio_alert">Media 23 + speech 11; alert sounds 25</string>
-    <string name="geely_audio_unavailable">H52 audio extensions not detected. Use generic routing.</string>
+    <string name="geely_audio_unavailable">The Geely H52 audio channels are not available on this unit (no H52 audio interface found). This option is disabled; the generic channel is used.</string>
+    <string name="geely_audio_unavailable_short">\u0020(not available on this unit)</string>
+    <string name="geely_audio_stale">The saved H52 audio channel setting does not apply to this unit; it is ignored and normal audio focus is used.</string>
     <string name="geely_audio_detected">H52 extensions detected: CarPlay 23, navigation speech 11.</string>
     <string name="geely_audio_hint">H52 routing overrides custom media/navigation channels and uses independent audio focus. Speech stays on 11; optional alert sounds use 25. The vendor alert constant needs vehicle testing. Reconnect after changes. Actual sound and mixing require a vehicle test.</string>
     <string name="geely_audio_preview">Test H52 audio channels</string>
@@ -571,6 +574,7 @@
     <string name="log_reader_ok">capturing</string>
     <string name="log_reader_failed">logcat unreadable (%1$s), app events only</string>
     <string name="log_saved_to">Saved: %1$s</string>
+    <string name="log_saved_private">Storage is not writable; the log was saved to app-private storage (read it with adb run-as): %1$s</string>
     <string name="log_save_failed">Could not save the log: %1$s</string>
     <string name="log_unknown">?</string>
     <string name="log_sum_focus">Focus: granted=%1$s · last change=%2$s</string>
