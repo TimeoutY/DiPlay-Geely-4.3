@@ -423,6 +423,18 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("drop_bt_music", enabled).apply()
     }
 
+    /**
+     * Request AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE (API 19+) for the CarPlay MUSIC session instead of
+     * plain AUDIOFOCUS_GAIN. Harder: other apps must stop (not duck). Default ON to reduce stock
+     * BT-music AVRCP-pausing the iPhone; turn off if navigation TTS is silenced.
+     */
+    fun loadExclusiveAudioFocus(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("exclusive_audio_focus", true)
+
+    fun saveExclusiveAudioFocus(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("exclusive_audio_focus", enabled).apply()
+    }
+
     /** Turn the car's own hotspot on after boot / app start. Default on (user request). */
     fun loadBootHotspotEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("boot_hotspot_enabled", true)

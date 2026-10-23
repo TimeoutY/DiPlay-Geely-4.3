@@ -50,9 +50,10 @@ internal object CarPlayMediaKeys {
 
     /**
      * API 18/19: hardware keys use registerMediaButtonEventReceiver + RemoteControlClient, and
-     * STREAM_MUSIC AUDIOFOCUS_GAIN is what makes Geely GKUI (帝豪GL, 4.4.2) switch its audio source
-     * to this app. Without it the AudioTrack plays into a muted/unrouted source: no sound.
-     * Holding focus makes GKUI's Bluetooth-music app (AVRCP-connected to the same iPhone) lose
+     * STREAM_MUSIC focus (AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE by default, or AUDIOFOCUS_GAIN when
+     * 「独占声音焦点」is off) is what makes Geely GKUI (帝豪GL, 4.4.2) switch its audio source to
+     * this app. Without it the AudioTrack plays into a muted/unrouted source: no sound.
+     * Exclusive/gain makes GKUI's Bluetooth-music app (AVRCP-connected to the same iPhone) lose
      * focus, and it may pause the iPhone over AVRCP (issue #1); see [maybeUndoFocusPause].
      */
     private val legacyFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
@@ -168,9 +169,12 @@ internal object CarPlayMediaKeys {
                 focusGrantedThisSession = false
                 DiPlayLog.note(FOCUS_TAG, "AirPlay session ${if (active) "active" else "ended"} wireless=$wireless " +
                     "sessionFocus=${AirPlayPersistence.loadSessionAudioFocus(context)} " +
-                    "antiAutoPause=${AirPlayPersistence.loadAntiAutoPause(context)}")
+                    "antiAutoPause=${AirPlayPersistence.loadAntiAutoPause(context)} " +
+                    "exclusiveFocus=${AirPlayPersistence.loadExclusiveAudioFocus(context)}")
                 if (active) {
                     PauseLoopGuard.clearFightForNewSession()
+                    // Publish preferred MEDIA gain before focus/quiet so AndroidMediaSink and logs agree.
+                    com.shilapi.xcertplay.media.AudioSessionFocus.preferredMediaGain = sessionMediaGain(context)
                     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP &&
                         AirPlayPersistence.loadSessionAudioFocus(context)) {
                         requestLegacyFocusLocked(context, "session-connect")
@@ -391,9 +395,11 @@ internal object CarPlayMediaKeys {
             DiPlayLog.note(FOCUS_TAG, "legacy focus ($reason): AudioManager unavailable", warn = true)
             return
         }
+        val gain = sessionMediaGain(context)
+        com.shilapi.xcertplay.media.AudioSessionFocus.preferredMediaGain = gain
         @Suppress("DEPRECATION")
         val result = runCatching {
-            audio.requestAudioFocus(legacyFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+            audio.requestAudioFocus(legacyFocusListener, AudioManager.STREAM_MUSIC, gain)
         }.getOrDefault(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
         legacyFocusHeld = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         if (legacyFocusHeld) {
@@ -411,11 +417,12 @@ internal object CarPlayMediaKeys {
             // Stock BT-music loses Android focus when we gain it and may AVRCP-pause ~1–2 s later.
             // Softly quiet it so the pause never fires; keep BT/AVRCP up for the steering wheel.
             StockBtMusicQuiet.quiet(context, "focus-granted:$reason")
-            // Re-assert GAIN shortly after: on 4.4 the same listener returns GRANTED without a LOSS
+            // Re-assert shortly after: on 4.4 the same listener returns GRANTED without a LOSS
             // to ourselves, and climbs back on top if the stock app briefly contested.
             mainHandler.postDelayed({ synchronized(this@CarPlayMediaKeys) { reassertFocusLocked(context) } }, 600L)
         }
-        DiPlayLog.note(FOCUS_TAG, "legacy focus request reason=$reason stream=MUSIC gain=GAIN granted=$legacyFocusHeld " +
+        DiPlayLog.note(FOCUS_TAG, "legacy focus request reason=$reason stream=MUSIC gain=${gainName(gain)} " +
+            "granted=$legacyFocusHeld " +
             "musicVolume=${runCatching { audio.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrNull()}/" +
             "${runCatching { audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrNull()} " +
             "mode=${runCatching { audio.mode }.getOrNull()} musicActive=${runCatching { audio.isMusicActive }.getOrNull()}")
@@ -424,11 +431,37 @@ internal object CarPlayMediaKeys {
     private fun reassertFocusLocked(context: Context) {
         if (!legacyFocusHeld || !sessionActive) return
         val audio = context.systemService(AudioManager::class.java, "audio") ?: return
+        val gain = sessionMediaGain(context)
+        com.shilapi.xcertplay.media.AudioSessionFocus.preferredMediaGain = gain
         @Suppress("DEPRECATION")
         val result = runCatching {
-            audio.requestAudioFocus(legacyFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+            audio.requestAudioFocus(legacyFocusListener, AudioManager.STREAM_MUSIC, gain)
         }.getOrDefault(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
-        DiPlayLog.note(FOCUS_TAG, "legacy focus re-assert after grant: granted=${result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED}")
+        StockBtMusicQuiet.quiet(context, "re-assert", force = true)
+        DiPlayLog.note(FOCUS_TAG, "legacy focus re-assert after grant: gain=${gainName(gain)} " +
+            "granted=${result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED}")
+    }
+
+    /**
+     * MEDIA session gain for API 19 / 4.4.2: AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE when the setting
+     * is on (default), else plain AUDIOFOCUS_GAIN. Siri/phone keep using transient in AndroidMediaSink.
+     */
+    private fun sessionMediaGain(context: Context): Int {
+        if (!AirPlayPersistence.loadExclusiveAudioFocus(context)) return AudioManager.AUDIOFOCUS_GAIN
+        // AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE = 4, added in API 19 (KitKat).
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE
+        } else {
+            AudioManager.AUDIOFOCUS_GAIN
+        }
+    }
+
+    private fun gainName(gain: Int): String = when (gain) {
+        AudioManager.AUDIOFOCUS_GAIN -> "GAIN"
+        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT -> "GAIN_TRANSIENT"
+        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK -> "GAIN_TRANSIENT_MAY_DUCK"
+        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE -> "GAIN_TRANSIENT_EXCLUSIVE"
+        else -> gain.toString()
     }
 
     private fun abandonLegacyFocusLocked(reason: String) {
@@ -466,7 +499,7 @@ internal object CarPlayMediaKeys {
             DiPlayLog.note(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant AGAIN within " +
                 "${PauseLoopGuard.FIGHT_WINDOW_MS / 1000}s of auto-resume; entering fight mode " +
                 "(stop auto-resume, quiet stock BT music)", warn = true)
-            appContext?.let { StockBtMusicQuiet.quiet(it, "fight-mode") }
+            appContext?.let { StockBtMusicQuiet.quiet(it, "fight-mode", force = true) }
             return
         }
         if (!PauseLoopGuard.autoResumeAllowed(now) || loopGuard.contention()) {

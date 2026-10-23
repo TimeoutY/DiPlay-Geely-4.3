@@ -591,6 +591,8 @@
     <string name="session_focus_description">Android 4.x: take music focus once when the iPhone connects and keep it for the whole session, so the car\'s Bluetooth music app gives way before any song starts. Off: take it when music starts.</string>
     <string name="anti_autopause_title">Prevent music auto-pause</string>
     <string name="anti_autopause_description">Ignore car play/pause keys for 3 s after music starts or focus changes; ignore PAUSE while the iPhone is paused and PLAY while it plays; 1 s debounce, and 4 keys in 20 s mutes play/pause for 30 s. If the car pauses the iPhone within 6 s of taking focus without a key press, resume (at most once per 5 minutes, never while focus is contended).</string>
+    <string name="exclusive_focus_title">Exclusive audio focus</string>
+    <string name="exclusive_focus_description">Harder than normal focus: other apps must stop (not duck). Reduces the car\'s Bluetooth music pausing the iPhone; turn off if navigation TTS is silenced.</string>
     <string name="drop_bt_music_title">Disconnect Bluetooth music during CarPlay (not recommended)</string>
     <string name="drop_bt_music_description">Turning Bluetooth off breaks steering-wheel next/prev (they use AVRCP). Keep Bluetooth on and rely on audio focus to stop auto-pause. Only enable if the stock BT music app still interrupts; disconnects A2DP only (HFP kept). Often ineffective on the vendor Bluetooth stack.</string>
     <string name="perf_stats_title">Performance stats</string>

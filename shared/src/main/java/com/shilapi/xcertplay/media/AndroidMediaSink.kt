@@ -195,7 +195,7 @@ internal class AudioFocusCoordinator(
         // Install identity before requesting focus: an OEM may dispatch a callback immediately.
         geelyListeners[key] = lease
         val gain = when (channel) {
-            AudioChannel.MEDIA -> AudioManager.AUDIOFOCUS_GAIN
+            AudioChannel.MEDIA -> AudioSessionFocus.preferredMediaGain
             AudioChannel.NAVIGATION -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
             AudioChannel.PHONE, AudioChannel.ASSISTANT -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
         }
@@ -287,7 +287,10 @@ internal class AudioFocusCoordinator(
         // permanent GAIN sends LOSS to our own session listener, and on abandon AOSP 4.4 hands focus
         // to the car's Bluetooth-music app (which then AVRCP-pauses the iPhone).
         val gain = if (AudioSessionFocus.sessionOwnsMusicFocus && primary.first != AudioChannel.MEDIA) {
+            // Siri/phone: transient so we do not permanently steal the session MUSIC slot.
             AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+        } else if (primary.first == AudioChannel.MEDIA) {
+            AudioSessionFocus.preferredMediaGain
         } else {
             AudioManager.AUDIOFOCUS_GAIN
         }
@@ -333,7 +336,7 @@ internal class AudioFocusCoordinator(
         if (request != null && requestedChannel == primary.channel) return
         abandonFocus()
         val gain = when (primary.channel) {
-            AudioChannel.MEDIA -> AudioManager.AUDIOFOCUS_GAIN
+            AudioChannel.MEDIA -> AudioSessionFocus.preferredMediaGain
             AudioChannel.PHONE -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
             AudioChannel.ASSISTANT -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
             AudioChannel.NAVIGATION -> return

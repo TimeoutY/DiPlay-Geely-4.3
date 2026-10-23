@@ -44,9 +44,11 @@ internal object BluetoothMusicGuard {
                 "stockPackages=${installed.ifEmpty { listOf("none") }}")
             // Softly quiet the stock BT-music app so it does not AVRCP-pause after we take focus.
             StockBtMusicQuiet.quiet(app, "session-connect(keep-bt)")
+            logEcarxNoSafeA2dpOnly()
             reportConnectedProfiles(app, pass = 0)
             return
         }
+        logEcarxNoSafeA2dpOnly()
         lastStatus = "尝试断开 A2DP（通话 HFP 保留）"
         val current = ++generation
         check(app, current, pass = 1)
@@ -166,6 +168,22 @@ internal object BluetoothMusicGuard {
         if (DiPlayPreferences.phoneUsesGeelyBluetooth(context)) {
             " (iPhone uses the Geely vendor Bluetooth stack; Android's A2DP API may not see it)"
         } else ""
+
+
+    /**
+     * Best-effort: H52.10500 / 12000 ECarX ecarx.bluetooth.IBluetoothManager only exposes the
+     * read-only isEnabled transaction (0x05). ANW getters are power / paired list / SPP init —
+     * no setter that disables the BT-music audio source / A2DP sink while leaving AVRCP/HFP up.
+     * Do not invent reflective calls; document and leave a clear log line.
+     */
+    private fun logEcarxNoSafeA2dpOnly() {
+        DiPlayLog.note(
+            TAG,
+            "ECarX: no safe A2DP-only API found " +
+                "(IBluetoothManager read-only isEnabled 0x05; ANW getters only; " +
+                "no A2DP-sink / music-source disable without risking HFP/AVRCP)",
+        )
+    }
 
     private fun name(profile: Int) = if (profile == BluetoothProfile.A2DP) "A2DP" else "A2DP_SINK"
     private fun mask(address: String?): String = address?.let { "**:**:**:" + it.takeLast(8) } ?: "?"

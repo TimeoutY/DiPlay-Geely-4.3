@@ -429,6 +429,7 @@ class DiPlayActivity : ComponentActivity() {
             geelyAudioControl(card)
             toggle(card, getString(R.string.session_focus_title), getString(R.string.session_focus_description), AirPlayPersistence.loadSessionAudioFocus(this)) { AirPlayPersistence.saveSessionAudioFocus(this, it) }
             toggle(card, getString(R.string.anti_autopause_title), getString(R.string.anti_autopause_description), AirPlayPersistence.loadAntiAutoPause(this)) { AirPlayPersistence.saveAntiAutoPause(this, it) }
+            toggle(card, getString(R.string.exclusive_focus_title), getString(R.string.exclusive_focus_description), AirPlayPersistence.loadExclusiveAudioFocus(this)) { AirPlayPersistence.saveExclusiveAudioFocus(this, it) }
             toggle(card, getString(R.string.drop_bt_music_title), getString(R.string.drop_bt_music_description), AirPlayPersistence.loadDropBluetoothMusic(this)) { AirPlayPersistence.saveDropBluetoothMusic(this, it) }
             if (!AirPlayPersistence.loadGeelyAudioRouting(this) || com.shilapi.xcertplay.media.GeelyAudioCapabilities.detect() == null) {
                 toggle(card, getString(R.string.contrib_audio_home_toggle_audio_focus), getString(R.string.contrib_audio_home_toggle_audio_focus_desc), AirPlayPersistence.loadAudioFocusEnabled(this)) { AirPlayPersistence.saveAudioFocusEnabled(this, it) }
