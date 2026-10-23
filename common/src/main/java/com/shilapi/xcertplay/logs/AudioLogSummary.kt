@@ -31,7 +31,9 @@ data class AudioLogSummary(
 
     companion object {
         private val GRANTED = Regex("""granted=(\w+)""")
+        private val HELD = Regex("""(?:^|\s)(?:held|focusHeld)=(\w+)""")
         private val CHANGE = Regex("""change=(\w+)""")
+        private val IPHONE = Regex("""iPhone(?:Playing| playing)=(\w+)""")
         private fun field(line: String, key: String): String? =
             Regex("""(?:^|\s)$key=([^\s]+)""").find(line)?.groupValues?.get(1)
 
@@ -40,23 +42,31 @@ data class AudioLogSummary(
             var statsSeen = 0
             for (line in lines.asReversed()) {
                 if (summary.focusRequest == null &&
-                    (line.contains("focus request") || line.contains("focus requested") || line.contains("Geely focus denied"))
+                    (line.contains("focus request") || line.contains("focus requested") ||
+                        line.contains("Geely focus denied") || line.contains("focus re-assert"))
                 ) {
                     summary = summary.copy(
                         focusRequest = line.substringAfter("): ", line).take(160),
                         focusGranted = GRANTED.find(line)?.groupValues?.get(1)
-                            ?: if (line.contains("denied")) "false" else null,
+                            ?: if (line.contains("denied")) "false" else summary.focusGranted,
                     )
+                }
+                if (summary.focusGranted == null) {
+                    HELD.find(line)?.groupValues?.get(1)?.let {
+                        summary = summary.copy(focusGranted = it)
+                    }
                 }
                 if (summary.lastFocusChange == null && line.contains("focus change")) {
                     summary = summary.copy(lastFocusChange = CHANGE.find(line)?.groupValues?.get(1))
                 }
-                if (summary.playState == null && line.contains("audio play()")) {
+                if (summary.playState == null &&
+                    (line.contains("audio play()") || (line.contains("audio stats") && line.contains("channel=MEDIA")))
+                ) {
                     summary = summary.copy(
-                        playState = field(line, "playState"),
-                        volume = field(line, "volume"),
-                        muted = field(line, "muted"),
-                        audioMode = field(line, "mode"),
+                        playState = field(line, "playState") ?: summary.playState,
+                        volume = field(line, "volume") ?: summary.volume,
+                        muted = field(line, "muted") ?: summary.muted,
+                        audioMode = field(line, "mode") ?: summary.audioMode,
                     )
                 }
                 if (statsSeen < 2 && line.contains("audio stats") && line.contains("channel=MEDIA")) {
@@ -72,10 +82,15 @@ data class AudioLogSummary(
                         summary.copy(previousWrittenFrames = written)
                     }
                 }
-                if (summary.iphonePlaying == null && line.contains("iPhone playing=")) {
-                    summary = summary.copy(iphonePlaying = field(line, "playing"))
+                if (summary.iphonePlaying == null) {
+                    IPHONE.find(line)?.groupValues?.get(1)?.let {
+                        summary = summary.copy(iphonePlaying = it)
+                    }
                 }
-                if (summary.a2dp == null && line.contains("DiPlay-BtAudio")) {
+                if (summary.a2dp == null &&
+                    (line.contains("DiPlay-BtAudio") || line.contains("A2DP drop") ||
+                        line.contains("BT status") || line.contains("stock BT music"))
+                ) {
                     summary = summary.copy(a2dp = line.substringAfter("): ", line).take(120))
                 }
             }

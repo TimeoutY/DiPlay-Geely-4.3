@@ -411,9 +411,13 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("anti_auto_pause", enabled).apply()
     }
 
-    /** Disconnect the iPhone's A2DP (car Bluetooth music) once wireless CarPlay is up. */
+    /**
+     * Disconnect the iPhone's A2DP once wireless CarPlay is up. Default OFF: on Geely GKUI the
+     * steering-wheel next/prev keys reach the iPhone over Bluetooth AVRCP, so dropping A2DP (or
+     * the whole BT link) kills song switching. Anti-auto-pause relies on focus + PauseLoopGuard.
+     */
     fun loadDropBluetoothMusic(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("drop_bt_music", true)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("drop_bt_music", false)
 
     fun saveDropBluetoothMusic(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("drop_bt_music", enabled).apply()

@@ -93,7 +93,32 @@ internal class PauseLoopGuard(private val now: () -> Long) {
 
         /** Process-wide: auto-resume at most once per 5 minutes, across session reconnects. */
         @Volatile var lastAutoResumeAt: Long = Long.MIN_VALUE / 2
+        /** After an auto-resume, another no-key pause within this window means we are fighting the BT-music app. */
+        const val FIGHT_WINDOW_MS = 10_000L
+        @Volatile var lastAutoResumeCompletedAt: Long = Long.MIN_VALUE / 2
+        @Volatile var fightMode: Boolean = false
 
-        fun autoResumeAllowed(now: Long): Boolean = now - lastAutoResumeAt >= AUTO_RESUME_MIN_GAP_MS
+        fun autoResumeAllowed(now: Long): Boolean =
+            !fightMode && now - lastAutoResumeAt >= AUTO_RESUME_MIN_GAP_MS
+
+        fun noteAutoResumeSent(now: Long) {
+            lastAutoResumeAt = now
+            lastAutoResumeCompletedAt = now
+        }
+
+        /** Call when the iPhone pauses again with no key after a recent auto-resume. */
+        fun notePostResumePause(now: Long): Boolean {
+            if (now - lastAutoResumeCompletedAt in 0 until FIGHT_WINDOW_MS) {
+                fightMode = true
+                return true
+            }
+            return false
+        }
+
+        fun clearFightForNewSession() {
+            // Fight mode survives a session reconnect for the 5-minute auto-resume gap; only clear
+            // the short window marker so a brand-new connect can still arm once.
+            lastAutoResumeCompletedAt = Long.MIN_VALUE / 2
+        }
     }
 }

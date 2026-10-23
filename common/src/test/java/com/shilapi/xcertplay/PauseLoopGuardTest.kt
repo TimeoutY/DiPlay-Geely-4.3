@@ -81,10 +81,22 @@ class PauseLoopGuardTest {
 
     @Test
     fun autoResumeAtMostOncePerFiveMinutes() {
+        PauseLoopGuard.fightMode = false
         PauseLoopGuard.lastAutoResumeAt = 0L
         assertTrue(PauseLoopGuard.autoResumeAllowed(PauseLoopGuard.AUTO_RESUME_MIN_GAP_MS))
         assertFalse(PauseLoopGuard.autoResumeAllowed(PauseLoopGuard.AUTO_RESUME_MIN_GAP_MS - 1))
         PauseLoopGuard.lastAutoResumeAt = Long.MIN_VALUE / 2
         assertEquals(true, PauseLoopGuard.autoResumeAllowed(0L))
+    }
+
+    @Test
+    fun fightModeStopsFurtherAutoResumes() {
+        PauseLoopGuard.fightMode = false
+        PauseLoopGuard.lastAutoResumeAt = Long.MIN_VALUE / 2
+        PauseLoopGuard.noteAutoResumeSent(1_000L)
+        assertTrue(PauseLoopGuard.notePostResumePause(1_000L + 3_000L))
+        assertTrue(PauseLoopGuard.fightMode)
+        assertFalse(PauseLoopGuard.autoResumeAllowed(1_000L + PauseLoopGuard.AUTO_RESUME_MIN_GAP_MS))
+        PauseLoopGuard.fightMode = false
     }
 }

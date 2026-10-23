@@ -45,4 +45,18 @@ class AudioLogSummaryTest {
         assertNull(summary.focusGranted)
         assertNull(summary.pcmFlowing)
     }
+
+    @Test
+    fun heldAndStatsFillGrantedPlayStateAndIphone() {
+        val summary = AudioLogSummary.from(listOf(
+            "10-22 20:56:01.000 W/DiPlay-AudioFocus( 1): legacy focus change=GAIN held=true iPhonePlaying=true",
+            "10-22 20:56:02.000 I/DiPlay-AudioStats( 1): audio stats audioType=media channel=MEDIA playState=3 writtenFrames=1000 playbackHeadFrames=900 playbackAdvanceFrames=900",
+            "10-22 20:56:03.000 I/DiPlay-BtAudio( 1): A2DP drop skipped: setting off (keep BT/AVRCP for steering-wheel keys)",
+        ))
+        assertEquals("true", summary.focusGranted)
+        assertEquals("GAIN", summary.lastFocusChange)
+        assertEquals("3", summary.playState)
+        assertEquals("true", summary.iphonePlaying)
+        assertTrue(summary.a2dp!!.contains("setting off"))
+    }
 }

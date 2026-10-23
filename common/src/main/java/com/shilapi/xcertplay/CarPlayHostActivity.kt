@@ -383,6 +383,7 @@ class CarPlayHostActivity : ComponentActivity() {
     private val shuttingDown = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var perfStatsView: TextView? = null
+    private var resolutionHintShown = false
     private val perfStatsTick = object : Runnable {
         override fun run() {
             val view = perfStatsView ?: return
@@ -396,6 +397,14 @@ class CarPlayHostActivity : ComponentActivity() {
             view.text = if (summary != null && fresh) summary else "性能统计：等待视频…"
             view.visibility = View.VISIBLE
             view.bringToFront()
+            if (summary != null && fresh && "⚠解码跟不上" in summary && !resolutionHintShown) {
+                resolutionHintShown = true
+                android.widget.Toast.makeText(
+                    this@CarPlayHostActivity,
+                    "画面跟不上：建议把分辨率调到 60%",
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            }
             mainHandler.postDelayed(this, 1_000L)
         }
     }
@@ -938,14 +947,27 @@ class CarPlayHostActivity : ComponentActivity() {
         }
     }
 
-    // The steering-wheel voice key reaches the focused window; while CarPlay is on screen it opens Siri.
+    // Steering-wheel voice → Siri; other MEDIA_* keys → CarPlay (hardwired path when the car
+    // delivers KeyEvents to the focused window instead of — or as well as — Bluetooth AVRCP).
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (!CarPlayMediaButton.opensSiri(event.keyCode)) return super.dispatchKeyEvent(event)
-        if (event.action == KeyEvent.ACTION_UP) {
-            val sent = controller?.requestSiri() == true
-            appendLog("Siri: voice key ${event.keyCode} sent=$sent")
+        if (CarPlayMediaButton.opensSiri(event.keyCode)) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                val sent = controller?.requestSiri() == true
+                appendLog("Siri: voice key ${event.keyCode} sent=$sent")
+            }
+            return true
         }
-        return true
+        if (CarPlayMediaKeys.onHardwiredKey(event)) return true
+        // Log unknown media-like codes once so a future photo can name the Geely keycode.
+        // MEDIA_PLAY_PAUSE(85) .. MEDIA_RECORD(130) covers the common media block on API 18.
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+            event.keyCode in 85..130
+        ) {
+            appendLog("unhandled media keycode=${event.keyCode}")
+            com.shilapi.xcertplay.logs.DiPlayLog.note("DiPlay-MediaKeys",
+                "unhandled media keycode=${event.keyCode} (not in CarPlayMediaButton map)")
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

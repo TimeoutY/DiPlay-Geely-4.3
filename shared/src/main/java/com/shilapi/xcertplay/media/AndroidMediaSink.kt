@@ -1495,13 +1495,22 @@ private class AudioRenderer(
         val index = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
         if (index < 0) {
             inputDropped++
-            if (inputDropped == 1) {
+            // Codec is backed up (seen as queued=90+ on weak 4.4 units). Drop oldest RTP packets so
+            // we catch up instead of playing seconds-late audio after an underrun restart.
+            var discarded = 0
+            while (queue.size > MAX_QUEUED_PACKETS / 4) {
+                if (queue.poll() == null) break
+                discarded++
+            }
+            if (discarded > 0) packetsDropped.addAndGet(discarded)
+            if (inputDropped == 1 || discarded > 0) {
                 Log.w(
                     TAG,
                     "audio decoder input unavailable codec=${format.codec} " +
-                        "queued=$inputQueued dropped=$inputDropped",
+                        "queued=$inputQueued dropped=$inputDropped rtpDiscarded=$discarded",
                 )
             }
+            drainCodec(codec)
             return
         }
         val input = inputBufferAt(codec, index) ?: return

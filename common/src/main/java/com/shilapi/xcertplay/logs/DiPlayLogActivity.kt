@@ -175,16 +175,28 @@ class DiPlayLogActivity : Activity() {
 
     private fun summaryText(s: AudioLogSummary): String {
         val unknown = getString(R.string.log_unknown)
+        // Live snapshot fills gaps when the ring buffer has rotated the grant/play lines away.
+        val live = runCatching { com.shilapi.xcertplay.CarPlayMediaKeys.statusSnapshot() }.getOrNull()
+        val granted = s.focusGranted
+            ?: live?.focusHeld?.let { if (it) "true" else "false" }
+            ?: unknown
+        val iphone = s.iphonePlaying
+            ?: live?.iphonePlaying?.toString()
+            ?: unknown
+        val bt = s.a2dp
+            ?: live?.btMusic?.takeIf { it.isNotBlank() }
+            ?: unknown
         val trend = when (s.pcmFlowing) {
             true -> getString(R.string.log_pcm_flowing, s.writtenFrames ?: 0, s.headProgress ?: 0)
             false -> getString(R.string.log_pcm_stalled, s.writtenFrames ?: 0, s.headProgress ?: 0)
             null -> getString(R.string.log_pcm_none)
         }
+        val fight = if (live?.fightMode == true) " · 争夺中" else ""
         return listOf(
-            getString(R.string.log_sum_focus, s.focusGranted ?: unknown, s.lastFocusChange ?: unknown),
+            getString(R.string.log_sum_focus, granted + fight, s.lastFocusChange ?: unknown),
             getString(R.string.log_sum_play, s.playState ?: unknown, s.volume ?: unknown, s.muted ?: unknown, s.audioMode ?: unknown),
             trend,
-            getString(R.string.log_sum_iphone, s.iphonePlaying ?: unknown, s.a2dp ?: unknown),
+            getString(R.string.log_sum_iphone, iphone, bt),
         ).joinToString("\n")
     }
 
