@@ -42,7 +42,7 @@ internal object BluetoothMusicGuard {
                 if (installed.isNotEmpty()) "；已装原车音乐=${installed.joinToString(",")}" else ""
             DiPlayLog.note(TAG, "A2DP drop skipped: setting off (keep BT/AVRCP for steering-wheel keys). " +
                 "stockPackages=${installed.ifEmpty { listOf("none") }}")
-            // Softly quiet the stock BT-music app so it does not AVRCP-pause after we take focus.
+            // nav: no-op unless 「静默原车蓝牙音乐」 is on (it can break the steering-wheel key bridge).
             StockBtMusicQuiet.quiet(app, "session-connect(keep-bt)")
             logEcarxNoSafeA2dpOnly()
             reportConnectedProfiles(app, pass = 0)

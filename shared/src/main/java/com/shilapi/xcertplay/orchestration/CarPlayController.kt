@@ -348,6 +348,8 @@ class CarPlayController(
             debugLog(
                 "AirPlay command type=$type params=${params.keys.sorted().joinToString(",")}",
             )
+            // nav build: honour the iPhone's own duck/unduck (Apple SDK "duckAudio"/"unduckAudio").
+            if (activeSession === session) handleDuckCommand(type, params)
             if (
                 config.transport == CarPlayTransport.WIRELESS &&
                 !closed &&
@@ -2313,5 +2315,28 @@ class CarPlayController(
         private const val EXECUTOR_CLOSE_TIMEOUT_MILLIS = 2_000L
         private const val ADAPTER_ADDRESS_PLACEHOLDER = "02:00:00:00:00:00"
         private val BLUETOOTH_ADDRESS = Regex("^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
+    }
+
+    private fun handleDuckCommand(type: String, params: Map<String, Any?>) {
+        fun num(vararg keys: String): Number? = keys.firstNotNullOfOrNull { key ->
+            when (val v = params[key]) {
+                is Number -> v
+                is String -> v.toDoubleOrNull()
+                else -> null
+            }
+        }
+        when (type.lowercase()) {
+            "duckaudio" -> {
+                val volume = num("volume", "duckVolume")?.toDouble()
+                val durationMs = num("durationMs", "duration")?.toLong()
+                debugLog("iPhone duckAudio volume=$volume durationMs=$durationMs")
+                com.shilapi.xcertplay.media.NavMixBus.shared.onRemoteDuck(volume, durationMs)
+            }
+            "unduckaudio" -> {
+                val durationMs = num("durationMs", "duration")?.toLong()
+                debugLog("iPhone unduckAudio durationMs=$durationMs")
+                com.shilapi.xcertplay.media.NavMixBus.shared.onRemoteUnduck(durationMs)
+            }
+        }
     }
 }

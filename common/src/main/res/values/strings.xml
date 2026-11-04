@@ -593,6 +593,10 @@
     <string name="anti_autopause_description">Ignore car play/pause keys for 3 s after music starts or focus changes; ignore PAUSE while the iPhone is paused and PLAY while it plays; 1 s debounce, and 4 keys in 20 s mutes play/pause for 30 s. If the car pauses the iPhone within 6 s of taking focus without a key press, resume (at most once per 5 minutes, never while focus is contended).</string>
     <string name="exclusive_focus_title">Exclusive audio focus</string>
     <string name="exclusive_focus_description">Harder than normal focus: other apps must stop (not duck). Reduces the car\'s Bluetooth music pausing the iPhone; turn off if navigation TTS is silenced.</string>
+    <string name="nav_mix_title">Mix navigation into music (smooth duck)</string>
+    <string name="nav_mix_description">While music plays, guidance is mixed into the music track and music ramps down to about 30%, then back up; no extra track and no focus change, so music no longer stutters. Without music, guidance plays on its own track.</string>
+    <string name="quiet_stock_bt_title">Quiet the car\'s Bluetooth music app (not recommended)</string>
+    <string name="quiet_stock_bt_description">Off by default. When on, sends the stock Bluetooth music app a pause and, in fight mode, ends its background process; this can break steering-wheel next/previous. Only try it if music still gets auto-paused.</string>
     <string name="drop_bt_music_title">Disconnect Bluetooth music during CarPlay (not recommended)</string>
     <string name="drop_bt_music_description">Turning Bluetooth off breaks steering-wheel next/prev (they use AVRCP). Keep Bluetooth on and rely on audio focus to stop auto-pause. Only enable if the stock BT music app still interrupts; disconnects A2DP only (HFP kept). Often ineffective on the vendor Bluetooth stack.</string>
     <string name="perf_stats_title">Performance stats</string>

@@ -66,7 +66,8 @@ internal object CarPlayMediaKeys {
                 autoResumeArmed = false
             }
             DiPlayLog.note(FOCUS_TAG, "legacy focus change=${focusChangeName(change)} held=$legacyFocusHeld " +
-                "sessionActive=$sessionActive mediaActive=$mediaAudioActive iPhonePlaying=$iphonePlaying" +
+                "sessionActive=$sessionActive mediaActive=$mediaAudioActive iPhonePlaying=$iphonePlaying " +
+                "navPrompt=${com.shilapi.xcertplay.media.NavPromptState.active}" +
                 if (change == AudioManager.AUDIOFOCUS_LOSS && loopGuard.contention()) {
                     " CONTENTION: another app took MUSIC focus ${PauseLoopGuard.CONTENTION_LOSSES}+ times in " +
                         "${PauseLoopGuard.CONTENTION_WINDOW_MS / 1000}s (likely the car's Bluetooth-music app still " +
@@ -278,9 +279,11 @@ internal object CarPlayMediaKeys {
         val keyName = KeyEvent.keyCodeToString(keyCode)
         if (kind == null) {
             // NEXT / PREVIOUS: always forward (steering-wheel song switch). Not part of the pause loop.
+            // Never filtered: no PauseLoopGuard, no focus/echo window, no storm/debounce.
             synchronized(this) { lastHardwareKeyAt = SystemClock.elapsedRealtime() }
-            send(toggleIndex, source)
-            DiPlayLog.note(TAG, "key $keyName -> SEND index=$toggleIndex ($source)")
+            val result = send(toggleIndex, source)
+            DiPlayLog.note(TAG, "key $keyName rx [$source] -> SEND index=$toggleIndex (next/prev never filtered) " +
+                "result=$result navPrompt=${com.shilapi.xcertplay.media.NavPromptState.active}", warn = result == "NOT_SENT")
             return
         }
         val (decision, playing) = synchronized(this) {
@@ -297,10 +300,10 @@ internal object CarPlayMediaKeys {
             PauseLoopGuard.Key.PAUSE -> CarPlayMediaButton.PAUSE
             PauseLoopGuard.Key.TOGGLE -> CarPlayMediaButton.PLAY_PAUSE
         }
-        DiPlayLog.note(TAG, "key $keyName iPhonePlaying=$playing -> " +
-            (if (decision.send) "SEND index=$index" else "IGNORED") + " (${decision.reason}) [$source]",
-            warn = !decision.send)
-        if (decision.send) send(index, source)
+        val result = if (decision.send) send(index, source) else "-"
+        DiPlayLog.note(TAG, "key $keyName rx [$source] iPhonePlaying=$playing -> " +
+            (if (decision.send) "SEND index=$index result=$result" else "IGNORED") + " (${decision.reason})",
+            warn = !decision.send || result == "NOT_SENT")
     }
 
     private fun registerLegacyMediaButtons(context: Context) {
@@ -310,8 +313,13 @@ internal object CarPlayMediaKeys {
                 if (intent?.action != Intent.ACTION_MEDIA_BUTTON) return
                 @Suppress("DEPRECATION")
                 val event = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return
-                val toggleIndex = CarPlayMediaButton.forKeyCode(event.keyCode) ?: return
+                val toggleIndex = CarPlayMediaButton.forKeyCode(event.keyCode)
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    if (toggleIndex == null) {
+                        DiPlayLog.note(TAG, "key ${KeyEvent.keyCodeToString(event.keyCode)} rx [legacyKeyEvent] -> " +
+                            "NOT MAPPED (not forwarded)")
+                        return
+                    }
                     handleMediaKeyEvent(event.keyCode, toggleIndex, "legacyKeyEvent")
                 }
             }
@@ -437,7 +445,7 @@ internal object CarPlayMediaKeys {
         val result = runCatching {
             audio.requestAudioFocus(legacyFocusListener, AudioManager.STREAM_MUSIC, gain)
         }.getOrDefault(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
-        StockBtMusicQuiet.quiet(context, "re-assert", force = true)
+        StockBtMusicQuiet.quiet(context, "re-assert")
         DiPlayLog.note(FOCUS_TAG, "legacy focus re-assert after grant: gain=${gainName(gain)} " +
             "granted=${result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED}")
     }
@@ -499,7 +507,7 @@ internal object CarPlayMediaKeys {
             DiPlayLog.note(FOCUS_TAG, "iPhone paused ${sinceGrant}ms after focus grant AGAIN within " +
                 "${PauseLoopGuard.FIGHT_WINDOW_MS / 1000}s of auto-resume; entering fight mode " +
                 "(stop auto-resume, quiet stock BT music)", warn = true)
-            appContext?.let { StockBtMusicQuiet.quiet(it, "fight-mode", force = true) }
+            appContext?.let { StockBtMusicQuiet.quiet(it, "fight-mode", fightMode = true) }
             return
         }
         if (!PauseLoopGuard.autoResumeAllowed(now) || loopGuard.contention()) {
@@ -567,13 +575,15 @@ internal object CarPlayMediaKeys {
         artworkCache.clear()
     }
 
-    private fun send(index: Int, source: String) {
+    /** Returns "VIDEO_PLAYER", "SENT" or "NOT_SENT" for the per-key log line. */
+    private fun send(index: Int, source: String): String {
         if (CarPlayVideo.onMediaKey(index)) {
             Log.i(TAG, "media key $source -> car video player $index")
-            return
+            return "VIDEO_PLAYER"
         }
         val sent = synchronized(this) { controller }?.sendMediaButton(index) ?: false
         Log.i(TAG, "media key $source -> CarPlay $index sent=$sent")
+        return if (sent) "SENT" else "NOT_SENT"
     }
 
     private fun decodeArtwork(bytes: ByteArray): Bitmap? {

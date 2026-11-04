@@ -435,6 +435,25 @@ object AirPlayPersistence {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("exclusive_audio_focus", enabled).apply()
     }
 
+    /**
+     * nav build: quiet the car's stock Bluetooth-music app (package-targeted pause; kill only in
+     * fight mode). Default OFF: on GKUI that app also bridges the steering-wheel NEXT/PREV to AVRCP.
+     */
+    fun loadQuietStockBtMusic(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("quiet_stock_bt_music", false)
+
+    fun saveQuietStockBtMusic(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("quiet_stock_bt_music", enabled).apply()
+    }
+
+    /** nav build: mix CarPlay navigation guidance into the music track with a smooth duck. Default ON. */
+    fun loadNavMixIntoMusic(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("nav_mix_into_music", true)
+
+    fun saveNavMixIntoMusic(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("nav_mix_into_music", enabled).apply()
+    }
+
     /** Turn the car's own hotspot on after boot / app start. Default on (user request). */
     fun loadBootHotspotEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("boot_hotspot_enabled", true)

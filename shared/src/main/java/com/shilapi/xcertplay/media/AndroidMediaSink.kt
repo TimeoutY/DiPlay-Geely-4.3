@@ -70,6 +70,7 @@ internal class AudioFocusCoordinator(
     private val listener = AudioManager.OnAudioFocusChangeListener { change ->
         synchronized(this) {
             runCatching { report("Audio: focus change=$change activeTracks=${active.size}") }
+            Log.i(TAG, "focus change=$change activeTracks=${active.size} navPrompt=${NavPromptState.active}")
             when (change) {
                 AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> setVolume(DUCKED_VOLUME)
                 AudioManager.AUDIOFOCUS_GAIN -> setVolume(FULL_VOLUME)
@@ -230,6 +231,8 @@ internal class AudioFocusCoordinator(
             return
         }
         lease.callbackVersion.incrementAndGet()
+        Log.i(TAG, "geely focus change channel=${key.channel} stream=${key.streamType} change=$change " +
+            "navPrompt=${NavPromptState.active}")
         val volume = when (change) {
             AudioManager.AUDIOFOCUS_GAIN -> FULL_VOLUME
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> DUCKED_VOLUME
@@ -412,6 +415,8 @@ class AndroidMediaSink(
     private val onAudioDiagnostic: (String) -> Unit = {},
     /** True while any music ("media") audio stream is running; called from media threads. */
     private val onMediaAudioChanged: (Boolean) -> Unit = {},
+    /** nav build: mix guidance into the music track (smooth duck) instead of a second track. */
+    private val navMixIntoMusic: Boolean = true,
 ) : MediaSink {
     private val appContext = context?.applicationContext
     private val audioManager = appContext?.systemService(AudioManager::class.java, "audio")
@@ -673,6 +678,7 @@ class AndroidMediaSink(
             onAudioDiagnostic,
             geelyAudio,
             geelyNavigationAlert,
+            navMixIntoMusic,
         ).also { audioRenderers[id] = it }
     }
 }
@@ -1082,6 +1088,7 @@ private class AudioRenderer(
     private val report: (String) -> Unit,
     private val geelyAudio: GeelyAudioCapabilities?,
     private val geelyNavigationAlert: Boolean,
+    private val navMixIntoMusic: Boolean = true,
 ) : Closeable {
     private data class AudioPacket(val rtp: ByteArray, val sample: Int)
 
@@ -1127,6 +1134,13 @@ private class AudioRenderer(
     private var underrunsAtPlaybackStart = 0
     private var lastPcmWriteNs = 0L
     private var rebufferCount = 0
+    // nav build: guidance is either summed into the music track (mix) or plays on its own track.
+    private val navMix = NavMixBus.shared
+    private val navResampler = NavMixBus.Resampler()
+    private var navRouteDecided = false
+    private var navMixMode = false
+    private var navMixedBytes = 0L
+    private var isMusicHost = false
     private val thread = Thread(::run, "carplay-audio").apply { isDaemon = true }
 
     fun start() {
@@ -1174,14 +1188,24 @@ private class AudioRenderer(
                 AudioCodecKind.OPUS -> if (android.os.Build.VERSION.SDK_INT >= 21) configureCodec(MediaFormat.MIMETYPE_AUDIO_OPUS)
                 AudioCodecKind.LPCM -> Unit
             }
-            createTrack()
-            requestAudioFocus()
+            val initial = mappedSelection().channel
+            mappedChannel = initial
+            if (initial == AudioChannel.NAVIGATION && navMixIntoMusic) {
+                // Decide mix vs own track at the first PCM, when we know whether music is flowing.
+                Log.i(STATS_TAG, "nav stream setup audioType=${format.audioType} codec=${format.codec} " +
+                    "rate=${format.sampleRate} ch=${format.channels}; route decided at first PCM " +
+                    "(musicFlowing=${navMix.hostFlowing()})")
+            } else {
+                createTrack()
+                requestAudioFocus()
+            }
             while (running) {
                 queue.poll(AUDIO_POLL_MILLIS, TimeUnit.MILLISECONDS)?.let(::handle)
                 // Output becomes ready asynchronously, including after the last packet of a burst.
                 // Waiting for the next UDP packet can strand decoded sound for hundreds of ms.
                 codec?.let(::drainCodec)
                 maintainPlaybackBuffer()
+                maintainNavMix()
                 logStatsIfDue()
             }
         } catch (_: InterruptedException) {
@@ -1292,6 +1316,11 @@ private class AudioRenderer(
             )
         }
         track = built
+        if (selection.channel == AudioChannel.MEDIA && navMixIntoMusic) {
+            navMix.attachHost(this, format.sampleRate, format.channels)
+            isMusicHost = true
+        }
+        if (selection.channel == AudioChannel.NAVIGATION) navMix.setOwnTrackMode()
         val capacityBytes = (PortableAudio.bufferSizeInFrames(built).takeIf { it > 0 }?.times(frameBytes)
             ?: PortableAudio.bufferSizeBytes(built)).coerceAtLeast(minBuffer)
         startThresholdBytes = MediaAudioBuffer.startBytesFor(plan.startBytes, capacityBytes, PREBUFFER_WRITE_CHUNK_BYTES)
@@ -1577,7 +1606,20 @@ private class AudioRenderer(
     }
 
     private fun writePcm(data: ByteArray, offset: Int = 0, length: Int = data.size) {
+        if (mappedChannel == AudioChannel.NAVIGATION && navMixIntoMusic && length > 0) {
+            if (!navRouteDecided) decideNavRoute()
+            if (navMixMode) {
+                if (navMix.pushNav(data, offset, length, format.sampleRate, format.channels, navResampler)) {
+                    navMixedBytes += length
+                    lastPcmWriteNs = System.nanoTime()
+                    return
+                }
+                fallBackToOwnTrack("music host gone")
+            }
+            navMix.noteNavSpeech(data, offset, length)
+        }
         val track = track ?: return
+        if (isMusicHost && length > 0) navMix.processHost(this, data, offset, length)
         if (!firstPcmLogged && length > 0) {
             firstPcmLogged = true
             val end = minOf(data.size, offset + minOf(length, 16))
@@ -1625,6 +1667,42 @@ private class AudioRenderer(
                 }
             }
         }
+    }
+
+    /** First guidance PCM: mix into the music track when music PCM is flowing, else own track. */
+    private fun decideNavRoute() {
+        navRouteDecided = true
+        if (navMix.hostFlowing()) {
+            navMixMode = true
+            Log.i(STATS_TAG, "nav route=MIX into music track audioType=${format.audioType} " +
+                "codec=${format.codec} rate=${format.sampleRate} ch=${format.channels} host=${navMix.hostFormat()} " +
+                "focus=none (no request/abandon per prompt) duck=${NavMixBus.DUCK_LEVEL}")
+            runCatching { report("Audio: nav route=MIX (no extra track, no focus) audioType=${format.audioType}") }
+        } else {
+            Log.i(STATS_TAG, "nav route=OWN_TRACK (music not flowing) audioType=${format.audioType}")
+            createTrack()
+            requestAudioFocus()
+        }
+    }
+
+    private fun fallBackToOwnTrack(reason: String) {
+        if (!navMixMode) return
+        navMixMode = false
+        navMix.clearNav(reason)
+        Log.w(STATS_TAG, "nav route MIX -> OWN_TRACK: $reason")
+        runCatching { report("Audio: nav route MIX -> OWN_TRACK ($reason)") }
+        if (track == null) {
+            createTrack()
+            requestAudioFocus()
+        }
+    }
+
+    private fun maintainNavMix() {
+        if (mappedChannel != AudioChannel.NAVIGATION) return
+        if (navMixMode && !navMix.hostFlowing() && navMix.pendingNavFrames() > 0) {
+            fallBackToOwnTrack("music stalled with guidance pending")
+        }
+        if (!navMixMode) navMix.tick()
     }
 
     private fun startPlayback(track: AudioTrack) {
@@ -1686,7 +1764,9 @@ private class AudioRenderer(
             "estimatedQueuedFrames=${queuedFrames ?: -1} writeErrors=$writeErrorsThisWindow " +
             "lastWriteError=${lastWriteErrorCode ?: "none"} zeroWrites=$zeroWritesThisWindow " +
             "partialWrites=$partialWritesThisWindow " +
-            "decoderDroppedTotal=$inputDropped outputBuffersTotal=$outputBuffers rebuffers=$rebufferCount ended=$force"
+            "decoderDroppedTotal=$inputDropped outputBuffersTotal=$outputBuffers rebuffers=$rebufferCount " +
+            "navRoute=${if (mappedChannel != AudioChannel.NAVIGATION) "-" else if (navMixMode) "mix" else if (navRouteDecided || track != null) "own" else "pending"} " +
+            "navMixedBytes=$navMixedBytes musicHost=$isMusicHost navPrompt=${NavPromptState.active} ended=$force"
         Log.i(STATS_TAG, line)
         report(line)
         statsLastUnderruns = underruns
@@ -1723,6 +1803,8 @@ private class AudioRenderer(
     @Synchronized
     private fun release() {
         LegacyOpus.release(this)
+        if (isMusicHost) navMix.detachHost(this)
+        if (navMixMode) navMix.clearNav("guidance stream ended")
         abandonAudioFocus()
         val codec = codec
         this.codec = null
