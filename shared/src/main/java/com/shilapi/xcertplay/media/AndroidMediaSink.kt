@@ -1137,8 +1137,10 @@ private class AudioRenderer(
     // nav build: guidance is either summed into the music track (mix) or plays on its own track.
     private val navMix = NavMixBus.shared
     private val navResampler = NavMixBus.Resampler()
-    private var navRouteDecided = false
-    private var navMixMode = false
+    private val navRoute = NavRoutePolicy()
+    private val navHandoffResampler = NavMixBus.Resampler()
+    private val navRouteDecided get() = navRoute.route != NavRoutePolicy.Route.NONE
+    private val navMixMode get() = navRoute.route == NavRoutePolicy.Route.MIX
     private var navMixedBytes = 0L
     private var isMusicHost = false
     private val thread = Thread(::run, "carplay-audio").apply { isDaemon = true }
@@ -1191,9 +1193,9 @@ private class AudioRenderer(
             val initial = mappedSelection().channel
             mappedChannel = initial
             if (initial == AudioChannel.NAVIGATION && navMixIntoMusic) {
-                // Decide mix vs own track at the first PCM, when we know whether music is flowing.
+                // Mix vs own track is chosen at the start of every prompt (first speech after a gap).
                 Log.i(STATS_TAG, "nav stream setup audioType=${format.audioType} codec=${format.codec} " +
-                    "rate=${format.sampleRate} ch=${format.channels}; route decided at first PCM " +
+                    "rate=${format.sampleRate} ch=${format.channels}; route decided per prompt " +
                     "(musicFlowing=${navMix.hostFlowing()})")
             } else {
                 createTrack()
@@ -1607,17 +1609,33 @@ private class AudioRenderer(
 
     private fun writePcm(data: ByteArray, offset: Int = 0, length: Int = data.size) {
         if (mappedChannel == AudioChannel.NAVIGATION && navMixIntoMusic && length > 0) {
-            if (!navRouteDecided) decideNavRoute()
-            if (navMixMode) {
-                if (navMix.pushNav(data, offset, length, format.sampleRate, format.channels, navResampler)) {
-                    navMixedBytes += length
-                    lastPcmWriteNs = System.nanoTime()
-                    return
+            val speech = NavMixBus.hasSpeech(data, offset, length)
+            val step = navRoute.onChunk(
+                now = System.nanoTime(),
+                speech = speech,
+                hostRecent = navMix.hostWroteWithin(NavRoutePolicy.DECIDE_HOST_RECENT_NS),
+            )
+            step.switchedTo?.let(::applyNavRoute)
+            when (step.sink) {
+                NavRoutePolicy.Sink.DROP -> return
+                NavRoutePolicy.Sink.MIX -> {
+                    // Silence while music is stalled would only pile up unheard; drop it.
+                    if (!speech && !navMix.hostFlowing()) return
+                    if (navMix.pushNav(data, offset, length, format.sampleRate, format.channels, navResampler)) {
+                        navMixedBytes += length
+                        lastPcmWriteNs = System.nanoTime()
+                        return
+                    }
+                    fallBackToOwnTrack("music host gone")
                 }
-                fallBackToOwnTrack("music host gone")
+                NavRoutePolicy.Sink.OWN -> Unit
             }
             navMix.noteNavSpeech(data, offset, length)
         }
+        writeTrack(data, offset, length)
+    }
+
+    private fun writeTrack(data: ByteArray, offset: Int, length: Int) {
         val track = track ?: return
         if (isMusicHost && length > 0) navMix.processHost(this, data, offset, length)
         if (!firstPcmLogged && length > 0) {
@@ -1669,38 +1687,74 @@ private class AudioRenderer(
         }
     }
 
-    /** First guidance PCM: mix into the music track when music PCM is flowing, else own track. */
-    private fun decideNavRoute() {
-        navRouteDecided = true
-        if (navMix.hostFlowing()) {
-            navMixMode = true
+    /** A new prompt chose [route]; switch the renderer to it. */
+    private fun applyNavRoute(route: NavRoutePolicy.Route) {
+        if (route == NavRoutePolicy.Route.MIX) {
             Log.i(STATS_TAG, "nav route=MIX into music track audioType=${format.audioType} " +
                 "codec=${format.codec} rate=${format.sampleRate} ch=${format.channels} host=${navMix.hostFormat()} " +
                 "focus=none (no request/abandon per prompt) duck=${NavMixBus.DUCK_LEVEL}")
             runCatching { report("Audio: nav route=MIX (no extra track, no focus) audioType=${format.audioType}") }
+            releaseNavOwnTrack()
         } else {
             Log.i(STATS_TAG, "nav route=OWN_TRACK (music not flowing) audioType=${format.audioType}")
-            createTrack()
-            requestAudioFocus()
+            ensureNavOwnTrack()
         }
+    }
+
+    private fun ensureNavOwnTrack() {
+        if (track != null) return
+        createTrack()
+        requestAudioFocus()
+    }
+
+    /** Back to MIX between prompts: the idle own track and its focus are not needed any more. */
+    private fun releaseNavOwnTrack() {
+        val old = track ?: return
+        abandonAudioFocus()
+        track = null
+        runCatching { old.pause() }
+        runCatching { old.flush() }
+        runCatching { old.release() }
+        playbackStarted = false
+        prebufferBytes = 0
+        fadeApplied = false
+        lastPlaybackHeadFrames = null
+        underrunsAtPlaybackStart = 0
+        statsLastUnderruns = 0
+        Log.i(STATS_TAG, "nav own track released (route back to MIX) audioType=${format.audioType}")
     }
 
     private fun fallBackToOwnTrack(reason: String) {
         if (!navMixMode) return
-        navMixMode = false
-        navMix.clearNav(reason)
-        Log.w(STATS_TAG, "nav route MIX -> OWN_TRACK: $reason")
+        navRoute.fellBackToOwn()
+        val pending = navMix.takePendingNav(reason)
+        val host = navMix.hostFormat()
+        Log.w(STATS_TAG, "nav route MIX -> OWN_TRACK: $reason handoffFrames=${host?.let { pending.size / it.second } ?: 0}")
         runCatching { report("Audio: nav route MIX -> OWN_TRACK ($reason)") }
-        if (track == null) {
-            createTrack()
-            requestAudioFocus()
+        ensureNavOwnTrack()
+        if (pending.isNotEmpty() && host != null) {
+            val bytes = ByteArray(pending.size * 2)
+            for (k in pending.indices) {
+                bytes[2 * k] = pending[k].toInt().toByte()
+                bytes[2 * k + 1] = (pending[k].toInt() shr 8).toByte()
+            }
+            val converted = navHandoffResampler.convert(bytes, 0, bytes.size, host.first, host.second,
+                format.sampleRate, format.channels)
+            val out = ByteArray(converted.size * 2)
+            for (k in converted.indices) {
+                out[2 * k] = converted[k].toInt().toByte()
+                out[2 * k + 1] = (converted[k].toInt() shr 8).toByte()
+            }
+            writeTrack(out, 0, out.size)
         }
     }
 
     private fun maintainNavMix() {
         if (mappedChannel != AudioChannel.NAVIGATION) return
         if (navMixMode && !navMix.hostFlowing() && navMix.pendingNavFrames() > 0) {
-            fallBackToOwnTrack("music stalled with guidance pending")
+            // Unheard speech moves to the own track; trailing silence is simply discarded.
+            if (navMix.hasPendingSpeech()) fallBackToOwnTrack("music stalled with guidance pending")
+            else navMix.clearNav("music stalled; only silence pending")
         }
         if (!navMixMode) navMix.tick()
     }

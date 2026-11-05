@@ -10,6 +10,12 @@ package com.shilapi.xcertplay.media
  * changes per prompt. The music gain ramps to [DUCK_LEVEL] (or the iPhone's duckAudio volume)
  * while guidance speaks and ramps back afterwards.
  *
+ * Latency: mixed guidance is heard after the music track's queued audio (the media jitter
+ * buffer, [MediaAudioBuffer.DEFAULT_MILLIS] + headroom, about 0.5-0.7 s) instead of the ~40 ms of
+ * an own track. Shrinking that buffer only while guidance plays would mean dropping or
+ * time-compressing queued music on the GKUI AudioTrack, which risks audible glitches and
+ * underruns on Wi-Fi gaps; that trade is deliberately not made (review rv1, NAV-LATENCY).
+ *
  * Pure Kotlin (injected clock and logger) so it is unit-testable; one [shared] instance per process.
  * Threading: the music renderer thread calls [processHost]; navigation renderer threads call
  * [pushNav] / [noteNavSpeech]; AirPlay command threads call [onRemoteDuck]/[onRemoteUnduck].
@@ -28,6 +34,10 @@ class NavMixBus(
     private var ring = ShortArray(0)
     private var ringRead = 0
     private var ringCount = 0
+    // Sample counters (host format) so silence queued after a prompt is not mistaken for guidance.
+    private var pushedSamples = 0L
+    private var consumedSamples = 0L
+    private var speechEndSamples = 0L
 
     // Host-thread duck state.
     private var gain = 1f
@@ -57,6 +67,7 @@ class NavMixBus(
         ring = ShortArray(hostRate * hostChannels * RING_SECONDS)
         ringRead = 0
         ringCount = 0
+        consumedSamples = pushedSamples
         hostLastWriteNs = 0L
         resetDuckLocked()
         log("nav-mix host attached rate=$sampleRate channels=$hostChannels")
@@ -68,6 +79,7 @@ class NavMixBus(
         hostId = null
         ringCount = 0
         ringRead = 0
+        consumedSamples = pushedSamples
         hostLastWriteNs = 0L
         resetDuckLocked()
     }
@@ -82,6 +94,40 @@ class NavMixBus(
         remoteDuckUntilNs = 0L
         speechUntilNs = 0L
         gain = 1f
+    }
+
+    /** True when the music renderer handed PCM to its track within [windowNs]. */
+    fun hostWroteWithin(windowNs: Long): Boolean {
+        val last = hostLastWriteNs
+        return hostId != null && last != 0L && nowNs() - last < windowNs
+    }
+
+    /**
+     * True while at least [MIN_PENDING_SPEECH_MS] of guidance up to its last speech chunk is queued
+     * and not yet mixed. Keep-alive silence queued after a prompt, or the last few ms of a word,
+     * do not count, so they never force an own track (and its focus request) on their own.
+     */
+    fun hasPendingSpeech(): Boolean = synchronized(lock) {
+        ringCount > 0 && speechEndSamples - consumedSamples >= hostRate.toLong() * hostChannels * MIN_PENDING_SPEECH_MS / 1000
+    }
+
+    /**
+     * Removes queued guidance and returns it (interleaved 16-bit, [hostFormat]) so a navigation
+     * renderer falling back to its own track can still play it instead of losing it.
+     */
+    fun takePendingNav(reason: String): ShortArray = synchronized(lock) {
+        // Hand off up to the last speech; keep-alive silence queued after it is not worth replaying.
+        val speech = (speechEndSamples - consumedSamples).coerceIn(0L, ringCount.toLong()).toInt()
+        val out = ShortArray(speech)
+        for (k in 0 until speech) out[k] = ring[(ringRead + k) % ring.size]
+        if (ringCount > 0) {
+            val ch = hostChannels.coerceAtLeast(1)
+            log("nav-mix handed off pendingFrames=${speech / ch} to own track, discarded silenceFrames=${(ringCount - speech) / ch} ($reason)")
+        }
+        ringCount = 0
+        ringRead = 0
+        consumedSamples = pushedSamples
+        out
     }
 
     /** Music PCM was produced recently, so mixed guidance will actually be played. */
@@ -100,6 +146,7 @@ class NavMixBus(
         droppedFrames += (ringCount / hostChannels.coerceAtLeast(1)).toLong()
         ringCount = 0
         ringRead = 0
+        consumedSamples = pushedSamples
     }
 
     /**
@@ -112,17 +159,20 @@ class NavMixBus(
             if (hostId == null || hostRate <= 0) return false
             converted = resampler.convert(data, offset, length, srcRate, srcChannels, hostRate, hostChannels)
             promptMode = "mix"
-            noteSpeechLocked(converted)
+            val speech = noteSpeechLocked(converted)
             var dropped = 0
             for (sample in converted) {
                 if (ringCount == ring.size) {
                     ringRead = (ringRead + 1) % ring.size
                     ringCount--
+                    consumedSamples++
                     dropped++
                 }
                 ring[(ringRead + ringCount) % ring.size] = sample
                 ringCount++
+                pushedSamples++
             }
+            if (speech) speechEndSamples = pushedSamples
             if (dropped > 0) droppedFrames += (dropped / hostChannels).toLong()
         }
         return true
@@ -142,13 +192,14 @@ class NavMixBus(
         if (peak >= SPEECH_PEAK) markSpeechLocked()
     }
 
-    private fun noteSpeechLocked(samples: ShortArray) {
+    private fun noteSpeechLocked(samples: ShortArray): Boolean {
         var peak = 0
         for (s in samples) {
             val a = if (s < 0) -s.toInt() else s.toInt()
             if (a > peak) peak = a
         }
         if (peak >= SPEECH_PEAK) markSpeechLocked()
+        return peak >= SPEECH_PEAK
     }
 
     private fun markSpeechLocked() {
@@ -220,6 +271,7 @@ class NavMixBus(
                     mixed += ring[ringRead].toInt()
                     ringRead = (ringRead + 1) % ring.size
                     ringCount--
+                    consumedSamples++
                     if (c == channels - 1) mixedFrames++
                 }
                 if (mixed > Short.MAX_VALUE) mixed = Short.MAX_VALUE.toInt()
@@ -302,6 +354,20 @@ class NavMixBus(
         const val HOST_FLOWING_NS = 1_000_000_000L
         const val REMOTE_DUCK_MAX_NS = 20_000_000_000L
         const val RING_SECONDS = 8
+        const val MIN_PENDING_SPEECH_MS = 100L
+
+        /** Whether a 16-bit LE PCM chunk carries guidance speech rather than iPhone keep-alive silence. */
+        @JvmStatic
+        fun hasSpeech(data: ByteArray, offset: Int, length: Int): Boolean {
+            var i = offset
+            val end = offset + length - 1
+            while (i < end) {
+                val s = ((data[i].toInt() and 0xff) or (data[i + 1].toInt() shl 8)).toShort().toInt()
+                if (s >= SPEECH_PEAK || s <= -SPEECH_PEAK) return true
+                i += 2
+            }
+            return false
+        }
 
         @JvmStatic val shared: NavMixBus by lazy {
             NavMixBus(log = { line ->
