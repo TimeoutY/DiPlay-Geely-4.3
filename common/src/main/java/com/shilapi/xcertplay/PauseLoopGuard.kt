@@ -66,10 +66,13 @@ internal class PauseLoopGuard(private val now: () -> Long) {
         if (forwarded.isNotEmpty() && t - forwarded.last() < DEBOUNCE_MS) {
             return Decision(false, "debounced (${t - forwarded.last()}ms after previous)")
         }
+        // A storm is a machine-gun chain (every key within STORM_GAP_MS of the previous one), not
+        // a driver pressing play/pause a few seconds apart: deliberate presses are always forwarded.
+        if (forwarded.isNotEmpty() && t - forwarded.last() >= STORM_GAP_MS) forwarded.clear()
         if (forwarded.size >= STORM_KEYS - 1) {
             stormUntil = t + STORM_MUTE_MS
             forwarded.clear()
-            return Decision(false, "key storm: $STORM_KEYS play/pause keys within ${STORM_WINDOW_MS / 1000}s; muting ${STORM_MUTE_MS / 1000}s")
+            return Decision(false, "key storm: $STORM_KEYS play/pause keys each <${STORM_GAP_MS}ms apart; muting ${STORM_MUTE_MS / 1000}s")
         }
         return record(Decision(true, "forwarded"))
     }
@@ -84,6 +87,8 @@ internal class PauseLoopGuard(private val now: () -> Long) {
         const val DEBOUNCE_MS = 1_000L
         const val STORM_WINDOW_MS = 20_000L
         const val STORM_KEYS = 4
+        /** Keys further apart than this break a storm chain (deliberate presses). */
+        const val STORM_GAP_MS = 1_500L
         const val STORM_MUTE_MS = 30_000L
         const val REREQUEST_GAP_MS = 10_000L
         const val CONTENTION_WINDOW_MS = 120_000L

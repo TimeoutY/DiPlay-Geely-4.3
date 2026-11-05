@@ -42,11 +42,11 @@ class PauseLoopGuardTest {
         t += 300
         assertFalse(guard.keyDecision(toggle, null, true).reason.isEmpty())
         assertFalse(guard.keyDecision(toggle, null, true).send)
-        t += 2_000
+        t += 1_000 // 1.3 s after the first forwarded key: still a machine-gun chain
         assertTrue(guard.keyDecision(toggle, null, true).send)
-        t += 2_000
+        t += 1_200
         assertTrue(guard.keyDecision(toggle, null, true).send)
-        t += 2_000
+        t += 1_200
         val storm = guard.keyDecision(toggle, null, true)
         assertFalse(storm.send)
         assertTrue(storm.reason.startsWith("key storm"))
@@ -54,6 +54,25 @@ class PauseLoopGuardTest {
         assertFalse(guard.keyDecision(toggle, null, true).send)
         t += 21_000
         assertTrue(guard.keyDecision(toggle, null, true).send)
+    }
+
+    @Test
+    fun deliberatePressesFourSecondsApartAreNeverAStorm() {
+        var playing = true
+        repeat(12) {
+            val d = guard.keyDecision(toggle, playing, true)
+            assertTrue("press ${it + 1} at ${it * 4}s: ${d.reason}", d.send)
+            playing = !playing
+            t += 4_000
+        }
+    }
+
+    @Test
+    fun pressesJustOverTheStormGapAreForwarded() {
+        repeat(8) {
+            assertTrue(guard.keyDecision(toggle, null, true).send)
+            t += 1_500 // PauseLoopGuard.STORM_GAP_MS
+        }
     }
 
     @Test
