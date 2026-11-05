@@ -58,7 +58,7 @@ class NavMixBus(
         ringRead = 0
         ringCount = 0
         hostLastWriteNs = 0L
-        gain = 1f
+        resetDuckLocked()
         log("nav-mix host attached rate=$sampleRate channels=$hostChannels")
     }
 
@@ -69,6 +69,19 @@ class NavMixBus(
         ringCount = 0
         ringRead = 0
         hostLastWriteNs = 0L
+        resetDuckLocked()
+    }
+
+    /**
+     * A new or ended music session must not inherit a duck: an iPhone duckAudio whose unduckAudio
+     * never arrived (session dropped) would otherwise hold music at the duck level for up to
+     * [REMOTE_DUCK_MAX_NS] after reconnecting.
+     */
+    private fun resetDuckLocked() {
+        remoteDuckLevel = null
+        remoteDuckUntilNs = 0L
+        speechUntilNs = 0L
+        gain = 1f
     }
 
     /** Music PCM was produced recently, so mixed guidance will actually be played. */
