@@ -1134,6 +1134,10 @@ private class AudioRenderer(
     private var underrunsAtPlaybackStart = 0
     private var lastPcmWriteNs = 0L
     private var rebufferCount = 0
+    // 性能统计 audio line: smallest queued cushion and how often the track ran dry this window
+    // (API 18/19 has no AudioTrack.getUnderrunCount), plus RTP packets that never arrived.
+    private val cushion = AudioCushionMeter()
+    private val rtpLoss = RtpSequenceGaps()
     // nav build: guidance is either summed into the music track (mix) or plays on its own track.
     private val navMix = NavMixBus.shared
     private val navResampler = NavMixBus.Resampler()
@@ -1153,6 +1157,7 @@ private class AudioRenderer(
 
     fun submit(rtp: ByteArray, sample: Int) {
         if (started) {
+            if (rtp.size >= 4) rtpLoss.onSequence(((rtp[2].toInt() and 0xff) shl 8) or (rtp[3].toInt() and 0xff))
             packetsReceived.incrementAndGet()
             val now = System.nanoTime()
             val previous = lastArrivalNs.getAndSet(now)
@@ -1207,6 +1212,7 @@ private class AudioRenderer(
                 // Waiting for the next UDP packet can strand decoded sound for hundreds of ms.
                 codec?.let(::drainCodec)
                 maintainPlaybackBuffer()
+                sampleCushion()
                 maintainNavMix()
                 logStatsIfDue()
             }
@@ -1323,8 +1329,14 @@ private class AudioRenderer(
             isMusicHost = true
         }
         if (selection.channel == AudioChannel.NAVIGATION) navMix.setOwnTrackMode()
-        val capacityBytes = (PortableAudio.bufferSizeInFrames(built).takeIf { it > 0 }?.times(frameBytes)
-            ?: PortableAudio.bufferSizeBytes(built)).coerceAtLeast(minBuffer)
+        val reportedFrames = PortableAudio.bufferSizeInFrames(built)
+        val capacityBytes = MediaAudioBuffer.trackCapacityBytes(
+            reportedFrames = reportedFrames,
+            nativeFrames = if (reportedFrames > 0) 0 else PortableAudio.nativeFrameCount(built),
+            frameBytes = frameBytes,
+            requestedBytes = plan.trackBufferBytes,
+            minBufferBytes = minBuffer,
+        )
         startThresholdBytes = MediaAudioBuffer.startBytesFor(plan.startBytes, capacityBytes, PREBUFFER_WRITE_CHUNK_BYTES)
         report("Audio: ready audioType=${format.audioType} codec=${format.codec} " +
             "rate=${format.sampleRate} channels=${format.channels} " +
@@ -1526,7 +1538,15 @@ private class AudioRenderer(
 
     private fun feedCodec(payload: ByteArray, presentationTimeUs: Long) {
         val codec = codec ?: return
-        val index = codec.dequeueInputBuffer(INPUT_TIMEOUT_US)
+        // rv1 gave up after one 10 ms dequeue and lost this access unit (an audible 23 ms hole, and
+        // after a Wi-Fi gap the whole catch-up burst) whenever mediaserver's AAC thread was briefly
+        // descheduled by video decoding. Drain PCM and retry; only a real stall loses audio.
+        val index = VideoInputPump.acquire(
+            running = { running },
+            drain = { drainCodec(codec) },
+            dequeue = { codec.dequeueInputBuffer(INPUT_TIMEOUT_US) },
+            timeoutNs = INPUT_WAIT_NS,
+        )
         if (index < 0) {
             inputDropped++
             // Codec is backed up (seen as queued=90+ on weak 4.4 units). Drop oldest RTP packets so
@@ -1788,6 +1808,14 @@ private class AudioRenderer(
         }
     }
 
+    private fun sampleCushion() {
+        if (mappedChannel != AudioChannel.MEDIA || bytesPerSecond <= 0) return
+        val track = track ?: return
+        if (!playbackStarted) { cushion.idle(); return }
+        val queued = bufferProgress.queuedBytes(track.playbackHeadPosition)
+        cushion.sample(queued * 1000L / bytesPerSecond)
+    }
+
     // Persist counters even during packet starvation, and flush before disconnect releases the track.
     private fun logStatsIfDue(force: Boolean = false) {
         val now = System.nanoTime()
@@ -1820,7 +1848,13 @@ private class AudioRenderer(
             "partialWrites=$partialWritesThisWindow " +
             "decoderDroppedTotal=$inputDropped outputBuffersTotal=$outputBuffers rebuffers=$rebufferCount " +
             "navRoute=${if (mappedChannel != AudioChannel.NAVIGATION) "-" else if (navMixMode) "mix" else if (navRouteDecided || track != null) "own" else "pending"} " +
-            "navMixedBytes=$navMixedBytes musicHost=$isMusicHost navPrompt=${NavPromptState.active} ended=$force"
+            "navMixedBytes=$navMixedBytes musicHost=$isMusicHost navPrompt=${NavPromptState.active} " +
+            "cushionMinMs=${cushion.minMs()} starves=${cushion.starves} rtpLost=${rtpLoss.lost} ended=$force"
+        if (mappedChannel == AudioChannel.MEDIA && currentTrack != null) {
+            VideoStatsBoard.publishAudio(cushion.minMs(), cushion.starves, rtpLoss.lost)
+        }
+        cushion.roll()
+        rtpLoss.roll()
         Log.i(STATS_TAG, line)
         report(line)
         statsLastUnderruns = underruns
@@ -1902,6 +1936,7 @@ private class AudioRenderer(
         const val OPUS_CODEC_DELAY_NANOS = 6_500_000L
         const val OPUS_SEEK_PRE_ROLL_NANOS = 80_000_000L
         const val INPUT_TIMEOUT_US = 10_000L
+        const val INPUT_WAIT_NS = 200_000_000L
         const val AUDIO_POLL_MILLIS = 10L
         const val BUFFER_TAIL_WAIT_NS = 500_000_000L
         // Holds a burst after a Wi-Fi gap (~4 s of AAC) instead of dropping it.

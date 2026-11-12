@@ -34,6 +34,25 @@ object MediaAudioBuffer {
     }
 
     /**
+     * Real capacity of a created AudioTrack in bytes. [reportedFrames] is bufferSizeInFrames
+     * (API 23+, else -1); [nativeFrames] is the frame count from AudioTrack.getNativeFrameCount()
+     * (protected, API 3-22; 0 when unavailable); [requestedBytes] is what the track was built with.
+     */
+    fun trackCapacityBytes(reportedFrames: Int, nativeFrames: Int, frameBytes: Int,
+        requestedBytes: Int, minBufferBytes: Int): Int {
+        // rv1 read API 22's hidden getBufferSize() here, which does not exist on 4.x, and fell back to
+        // getMinBufferSize: the 帝豪GL log showed "buffer=46ms start=34" with the 500 ms preset, so
+        // play() started with a 34 ms cushion and every Wi-Fi gap became a dropout. A 4.x MODE_STREAM
+        // track is created with the requested size (AudioFlinger may round up, never down).
+        val bytes = when {
+            reportedFrames > 0 -> reportedFrames.toLong() * frameBytes
+            nativeFrames > 0 -> nativeFrames.toLong() * frameBytes
+            else -> requestedBytes.toLong()
+        }
+        return bytes.coerceAtMost(Int.MAX_VALUE.toLong()).toInt().coerceAtLeast(minBufferBytes)
+    }
+
+    /**
      * The device may grant a smaller AudioTrack than requested. Writes block while the track is
      * paused and full, so the start level must stay below the real capacity or play() never runs.
      */

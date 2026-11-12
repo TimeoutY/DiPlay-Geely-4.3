@@ -84,6 +84,10 @@ class AudioStream(
     }
 
     private fun runData(socket: DatagramSocket, listener: Listener) {
+        // The screen receiver and video decoder run at URGENT_DISPLAY (-8); left at the default (0)
+        // this thread, which decrypts every packet in Java, was the lowest-priority link of the
+        // music path on the single busy 4.4 CPU. Match the renderer (THREAD_PRIORITY_AUDIO).
+        runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO) }
         val stats = StreamReceiveStats("audio type=$streamType", onDiagnostic)
         val buffer = ByteArray(DATAGRAM_BYTES)
         try {

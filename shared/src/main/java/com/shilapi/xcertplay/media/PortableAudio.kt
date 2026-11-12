@@ -41,8 +41,15 @@ object PortableAudio {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) runCatching { track.routedDevice?.type }.getOrNull()
         else null
 
-    fun bufferSizeBytes(track: AudioTrack): Int =
-        runCatching { AudioTrack::class.java.getMethod("getBufferSize").invoke(track) as Int }.getOrDefault(0)
+    /**
+     * Frame count of the native track on API 18-22, where bufferSizeInFrames does not exist:
+     * AudioTrack.getNativeFrameCount() is protected there. 0 when unavailable.
+     */
+    fun nativeFrameCount(track: AudioTrack): Int =
+        runCatching {
+            AudioTrack::class.java.getDeclaredMethod("getNativeFrameCount")
+                .apply { isAccessible = true }.invoke(track) as Int
+        }.getOrDefault(0)
 
     fun routedDeviceType(recorder: AudioRecord): Int? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null
