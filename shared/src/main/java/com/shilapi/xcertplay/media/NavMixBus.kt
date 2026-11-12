@@ -259,6 +259,12 @@ class NavMixBus(
         val downStep = 1f / (hostRate * DUCK_DOWN_SECONDS)
         val upStep = 1f / (hostRate * DUCK_UP_SECONDS)
         val hadNav = ringCount > 0
+        // Plain music (no guidance, no duck, nothing ramping) is the normal case: leave the PCM
+        // untouched instead of a per-sample float loop on the weak head-unit CPU.
+        if (!hadNav && gain == 1f && target == 1f) {
+            if (promptActive && !speaking) endPromptLocked(now, "music restored")
+            return@synchronized
+        }
         var i = offset
         val end = offset + length - 2 * channels + 1
         while (i <= end) {
