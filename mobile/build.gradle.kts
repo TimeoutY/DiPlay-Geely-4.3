@@ -18,8 +18,8 @@ android {
         // API 18 predates native multidex; keep the launcher installable on 4.3.
         multiDexEnabled = true
         targetSdk = 37
-        versionCode = 40
-        versionName = "0.2.13-H52-P21-rv1"
+        versionCode = 41
+        versionName = "0.2.13-H52-P21-rv2"
 
     }
 
